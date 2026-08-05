@@ -9,12 +9,14 @@ import { ReservationsModule } from './modules/reservations/reservations.module';
 import { RestaurantsModule } from './modules/restaurants/restaurants.module';
 import { ReviewsModule } from './modules/reviews/reviews.module';
 import { TablesModule } from './modules/tables/tables.module';
+import { RedisModule } from './redis/redis.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
     }),
+    RedisModule,
     PrismaModule,
     AuthModule,
     UsersModule,
@@ -29,4 +31,3 @@ import { TablesModule } from './modules/tables/tables.module';
   providers: [],
 })
 export class AppModule {}
-

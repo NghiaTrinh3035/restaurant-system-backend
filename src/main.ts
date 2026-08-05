@@ -3,6 +3,10 @@ import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
+import { TransformInterceptor } from './core/common/interceptors/transform.interceptor';
+import { GlobalExceptionFilter } from './core/exceptions/global-exception.filter';
+import { Reflector } from '@nestjs/core';
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
@@ -19,6 +23,10 @@ async function bootstrap() {
 
   // Global API Prefix
   app.setGlobalPrefix('api');
+
+  // Global Interceptor and Filter
+  app.useGlobalInterceptors(new TransformInterceptor(app.get(Reflector)));
+  app.useGlobalFilters(new GlobalExceptionFilter());
 
   // Global Validation Pipe
   app.useGlobalPipes(
