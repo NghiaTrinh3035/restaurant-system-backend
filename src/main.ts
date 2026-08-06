@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import cookieParser from 'cookie-parser';
 
 import { TransformInterceptor } from './core/common/interceptors/transform.interceptor';
 import { GlobalExceptionFilter } from './core/exceptions/global-exception.filter';
@@ -10,9 +11,12 @@ import { Reflector } from '@nestjs/core';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  // Enable cookie parser
+  app.use(cookieParser());
+
   // Parse CORS origins from .env
-  const corsOrigins = process.env.CORS_ORIGINS 
-    ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim())
+  const corsOrigins = process.env.CORS_ALLOWED_ORIGINS
+    ? process.env.CORS_ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
     : '*'; // Fallback to allow all if not set
 
   // Enable CORS

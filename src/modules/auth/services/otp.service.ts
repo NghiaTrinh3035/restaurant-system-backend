@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import Redis from 'ioredis';
 import { REDIS_CLIENT } from 'src/redis/redis.module';
+import { OtpType } from '../enums/otp-type.enum';
 
 const OTP_TTL_SECONDS = 5 * 60; // 5 phút
 
@@ -12,73 +13,51 @@ export class OtpService {
     @Inject(REDIS_CLIENT) private readonly redisClient: Redis,
   ) {}
 
-  /**
-   * Sinh ngẫu nhiên mã OTP 6 chữ số.
-   */
-  generateOtp(): string {
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  // 1. Hàm tạo key động dựa trên Enum
+  private getRedisKey(email: string, type: OtpType): string {
+    return `otp:${type.toLowerCase()}:${email}`;
+  }
+
+  // 2. Hàm sinh OTP và tự động lưu vào Redis
+  async generateAndSaveOtp(email: string, type: OtpType): Promise<string> {
+    const otp = Math.floor(100000 + Math.random() * 900000).toString(); // Sinh OTP 6 số
+    const redisKey = this.getRedisKey(email, type);
+    
+    // Lưu vào Redis với TTL = 300 giây (5 phút)
+    await this.redisClient.set(redisKey, otp, 'EX', OTP_TTL_SECONDS);
+    this.logger.log(`OTP saved for ${email} (TTL: ${OTP_TTL_SECONDS}s)`); 
     return otp;
   }
 
-  /**
-   * Lưu OTP vào Redis với TTL 5 phút.
-   * Key: otp:register:{email}
-   * Value: JSON { otp: "123456" }
-   */
-  async saveOtp(email: string, otp: string): Promise<void> {
-    const key = this.buildKey(email);
-    const value = JSON.stringify({ otp });
-    await this.redisClient.set(key, value, 'EX', OTP_TTL_SECONDS);
-    this.logger.log(`OTP saved for ${email} (TTL: ${OTP_TTL_SECONDS}s)`);
-  }
+  // 3. Hàm kiểm tra tính hợp lệ của OTP
+  async verifyOtp(email: string, otp: string, type: OtpType): Promise<boolean> {
+    const redisKey = this.getRedisKey(email, type);
+    const storedOtp = await this.redisClient.get(redisKey);
 
-  /**
-   * Xác minh OTP. So sánh với giá trị trong Redis.
-   * Trả về true nếu hợp lệ, false nếu sai hoặc đã hết hạn.
-   */
-  async verifyOtp(email: string, otp: string): Promise<boolean> {
-    const key = this.buildKey(email);
-    const raw = await this.redisClient.get(key);
-
-    if (!raw) {
-      return false; // OTP không tồn tại hoặc đã hết hạn
+    if (storedOtp && storedOtp === otp) {
+      await this.redisClient.del(redisKey); // Xóa OTP sau khi xác thực thành công
+      return true;
     }
-
-    const parsed = JSON.parse(raw) as { otp: string };
-    return parsed.otp === otp;
+    return false;
   }
 
-  /**
-   * Xóa OTP khỏi Redis sau khi xác thực thành công.
-   */
-  async deleteOtp(email: string): Promise<void> {
-    const key = this.buildKey(email);
-    await this.redisClient.del(key);
+  // 4. Hàm xóa OTP cũ (Dùng cho tính năng Resend OTP)
+  async clearOtp(email: string, type: OtpType): Promise<void> {
+    const redisKey = this.getRedisKey(email, type);
+    await this.redisClient.del(redisKey);
     this.logger.log(`OTP deleted for ${email}`);
   }
 
-  /**
-   * Sinh OTP mới, ghi đè OTP cũ và reset TTL về 5 phút.
-   * Trả về OTP mới để caller có thể gửi email.
-   */
-  async resendOtp(email: string): Promise<string> {
-    const newOtp = this.generateOtp();
-    await this.saveOtp(email, newOtp); // ghi đè + reset TTL
-    this.logger.log(`OTP resent for ${email}`);
-    return newOtp;
+  // 5. Hàm gửi lại OTP
+  async resendOtp(email: string, type: OtpType): Promise<string> {
+    await this.clearOtp(email, type);
+    return this.generateAndSaveOtp(email, type);
   }
 
-  /**
-   * Kiểm tra key OTP có tồn tại trong Redis không (bất kể giá trị).
-   * Dùng để phân biệt "OTP hết hạn" vs "OTP sai".
-   */
-  async hasOtp(email: string): Promise<boolean> {
-    const key = this.buildKey(email);
-    const exists = await this.redisClient.exists(key);
+  // 6. Hàm kiểm tra key OTP có tồn tại trong Redis không (bất kể giá trị).
+  async hasOtp(email: string, type: OtpType): Promise<boolean> {
+    const redisKey = this.getRedisKey(email, type);
+    const exists = await this.redisClient.exists(redisKey);
     return exists === 1;
-  }
-
-  private buildKey(email: string): string {
-    return `otp:register:${email}`;
   }
 }

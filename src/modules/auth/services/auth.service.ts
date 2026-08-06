@@ -3,12 +3,15 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { RegisterDto } from '../dtos/register.dto';
 import { RequestRegisterOtpDto } from '../dtos/request-register-otp.dto';
 import { ResendOtpDto } from '../dtos/resend-otp.dto';
+import { ForgotPasswordDto } from '../dtos/forgot-password.dto';
+import { ResetPasswordDto } from '../dtos/reset-password.dto';
 import { AuthProvider, Role } from '@prisma/client';
 import { LoginDto } from '../dtos/login.dto';
 import { PasswordService } from 'src/core/security/password/password.service';
 import { AuthJwtService } from 'src/core/security/jwt/auth-jwt.service';
 import { OtpService } from './otp.service';
 import { MailService } from 'src/mail/mail.service';
+import { OtpType } from '../enums/otp-type.enum';
 import {
   EmailAlreadyExistsException,
   InvalidCredentialsException,
@@ -27,7 +30,7 @@ export class AuthService {
     private readonly jwtService: AuthJwtService,
     private readonly otpService: OtpService,
     private readonly mailService: MailService,
-  ) {}
+  ) { }
 
   /**
    * Bước 1: Người dùng nhập email → gửi OTP.
@@ -41,8 +44,7 @@ export class AuthService {
       throw new EmailAlreadyExistsException();
     }
 
-    const otp = this.otpService.generateOtp();
-    await this.otpService.saveOtp(dto.email, otp);
+    const otp = await this.otpService.generateAndSaveOtp(dto.email, OtpType.REGISTER);
     await this.mailService.sendOtpEmail(dto.email, otp);
 
     return new ApiResponseDto(true, 'Mã OTP đã được gửi đến email của bạn', null);
@@ -50,17 +52,16 @@ export class AuthService {
 
   /**
    * Bước 1.5: Gửi lại OTP mới, ghi đè OTP cũ, reset TTL.
-   * Kiểm tra email chưa tồn tại để không gửi OTP cho tài khoản đã có.
    */
   async resendOtp(dto: ResendOtpDto): Promise<ApiResponseDto<null>> {
     const existingUser = await this.prisma.user.findUnique({
       where: { email: dto.email },
     });
-    if (existingUser) {
-      throw new EmailAlreadyExistsException();
-    }
 
-    const newOtp = await this.otpService.resendOtp(dto.email);
+    // Nếu user đã tồn tại -> Đây là luồng Forgot Password. Nếu chưa -> Luồng Register.
+    const type = existingUser ? OtpType.FORGOT_PASSWORD : OtpType.REGISTER;
+
+    const newOtp = await this.otpService.resendOtp(dto.email, type);
     await this.mailService.sendOtpEmail(dto.email, newOtp);
 
     return new ApiResponseDto(true, 'Mã OTP mới đã được gửi đến email của bạn', null);
@@ -78,13 +79,13 @@ export class AuthService {
     }
 
     // 2. Kiểm tra key OTP có tồn tại không (phân biệt hết hạn vs sai mã)
-    const otpKeyExists = await this.otpService.hasOtp(dto.email);
+    const otpKeyExists = await this.otpService.hasOtp(dto.email, OtpType.REGISTER);
     if (!otpKeyExists) {
       throw new OtpExpiredException();
     }
 
     // 3. Verify OTP
-    const isOtpValid = await this.otpService.verifyOtp(dto.email, dto.otp);
+    const isOtpValid = await this.otpService.verifyOtp(dto.email, dto.otp, OtpType.REGISTER);
     if (!isOtpValid) {
       throw new InvalidOtpException();
     }
@@ -113,9 +114,6 @@ export class AuthService {
     };
     const accessToken = this.jwtService.generateAccessToken(payload);
     const refreshToken = this.jwtService.generateRefreshToken(payload);
-
-    // 7. Xóa OTP khỏi Redis sau khi đăng ký thành công
-    await this.otpService.deleteOtp(dto.email);
 
     const { passwordHash, ...safeUser } = newUser;
 
@@ -161,5 +159,41 @@ export class AuthService {
       refreshToken,
       user: safeUser,
     };
+  }
+
+  /**
+   * Quên mật khẩu: Yêu cầu gửi mã OTP
+   */
+  async forgotPassword(dto: ForgotPasswordDto): Promise<ApiResponseDto<null>> {
+    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    if (!user) {
+      // Trả về success kể cả khi không có email để bảo mật thông tin
+      return new ApiResponseDto(true, 'Nếu email tồn tại, mã OTP đã được gửi.', null);
+    }
+
+    const otp = await this.otpService.generateAndSaveOtp(dto.email, OtpType.FORGOT_PASSWORD);
+
+    await this.mailService.sendOtpEmail(dto.email, otp);
+
+    return new ApiResponseDto(true, 'Mã xác nhận đặt lại mật khẩu đã được gửi đến email của bạn.', null);
+  }
+
+  /**
+   * Quên mật khẩu: Đặt lại mật khẩu mới
+   */
+  async resetPassword(dto: ResetPasswordDto): Promise<ApiResponseDto<null>> {
+    const isOtpValid = await this.otpService.verifyOtp(dto.email, dto.otp, OtpType.FORGOT_PASSWORD);
+    if (!isOtpValid) {
+      throw new InvalidOtpException();
+    }
+
+    const hashedPassword = await this.passwordService.hashPassword(dto.newPassword);
+
+    await this.prisma.user.update({
+      where: { email: dto.email },
+      data: { passwordHash: hashedPassword },
+    });
+
+    return new ApiResponseDto(true, 'Đặt lại mật khẩu thành công.', null);
   }
 }
