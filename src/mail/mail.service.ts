@@ -22,7 +22,7 @@ export class MailService {
   }
 
   /**
-   * Gửi email chứa mã OTP xác thực đăng ký.
+   * Gửi email chứa mã OTP xác thực đăng ký và quên mật khẩu.
    */
   async sendOtpEmail(to: string, otp: string): Promise<void> {
     const from = this.configService.get<string>('MAIL_FROM');
@@ -40,18 +40,6 @@ export class MailService {
       this.logger.error(`Failed to send OTP email to ${to}`, error);
       throw error;
     }
-  }
-
-  /**
-   * Gửi email reset password.
-   * @todo Implement khi có tính năng Forgot Password.
-   */
-  async sendResetPasswordEmail(
-    _to: string,
-    _resetLink: string,
-  ): Promise<void> {
-    // TODO: implement when Forgot Password feature is ready
-    throw new Error('sendResetPasswordEmail is not implemented yet');
   }
 
   /**
