@@ -1,13 +1,19 @@
-import { IsOptional, IsString } from "class-validator";
-
+import { IsEnum, IsNotEmpty, IsOptional, IsString } from "class-validator";
+import { EGender } from "../enums/gender.enum";
 export class UpdateUserProfileRequest {
     @IsString()
-    fullname: string;
-
-    @IsString()
-    phone: string;
+    @IsOptional()
+    fullName?: string;
 
     @IsString()
     @IsOptional()
-    avatar: string;
-}   
+    phone?: string;
+
+    @IsString()
+    @IsOptional()
+    avatar?: string;
+
+    @IsEnum(EGender, { message: 'Vui lòng nhập giới tính hợp lệ' })
+    @IsOptional()
+    gender?: EGender
+}

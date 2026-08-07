@@ -3,7 +3,7 @@ import { UsersService } from '../services/users.service';
 import { UpdateUserProfileRequest } from '../dto/user-profile.dto';
 import { JwtAuthGuard } from 'src/core/common/guards/jwt-auth.guard';
 import { ResponseMessage } from 'src/core/common/decorators/response-message.decorator';
-import { AuthRequest } from 'src/core/common/interfaces/auth.interface';
+import { CurrentUser } from 'src/core/common/decorators/current-user.decorator';
 @Controller('users')
 export class UsersController {
   constructor(
@@ -14,8 +14,10 @@ export class UsersController {
   @HttpCode(HttpStatus.OK)
   @ResponseMessage('Lấy thông tin người dùng thành công')
   @UseGuards(JwtAuthGuard)
-  async getMe(@Req() req: AuthRequest) {
-    return this.usersService.me(req.user.id);
+  async getMe(
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.usersService.me(userId);
   }
 
   @Patch('me')
@@ -23,11 +25,11 @@ export class UsersController {
   @ResponseMessage('Cập nhật hồ sơ thành công')
   @UseGuards(JwtAuthGuard)
   async updateProfile(
-    @Req() req: AuthRequest,
+    @CurrentUser('id') userId: string,
     @Body() body: UpdateUserProfileRequest,
   ) {
     return this.usersService.updateProfile(
-      req.user.id,
+      userId,
       body,
     );
   }
