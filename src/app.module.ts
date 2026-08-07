@@ -12,6 +12,7 @@ import { ReviewsModule } from './modules/reviews/reviews.module';
 import { TablesModule } from './modules/tables/tables.module';
 import { RedisModule } from './redis/redis.module';
 import { JwtAuthGuard } from './core/common/guards/jwt-auth.guard';
+import { AuthJwtModule } from './core/security/jwt/jwt.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { JwtAuthGuard } from './core/common/guards/jwt-auth.guard';
     RestaurantsModule,
     ReviewsModule,
     TablesModule,
+    AuthJwtModule,
   ],
   controllers: [],
   providers: [
@@ -37,4 +39,4 @@ import { JwtAuthGuard } from './core/common/guards/jwt-auth.guard';
     },
   ],
 })
-export class AppModule {}
+export class AppModule { }
