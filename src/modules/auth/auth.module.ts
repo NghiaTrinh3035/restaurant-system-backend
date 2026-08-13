@@ -6,6 +6,7 @@ import { ConfigModule } from '@nestjs/config';
 import { PasswordService } from 'src/core/security/password/password.service';
 import { MailModule } from 'src/mail/mail.module';
 import { AuthJwtModule } from 'src/core/security/jwt/jwt.module';
+import { GoogleStrategy } from 'src/core/security/google/google.strategy';
 
 @Module({
   imports: [
@@ -14,7 +15,7 @@ import { AuthJwtModule } from 'src/core/security/jwt/jwt.module';
     AuthJwtModule
   ],
   controllers: [AuthController],
-  providers: [AuthService, OtpService, PasswordService],
+  providers: [AuthService, OtpService, PasswordService, GoogleStrategy],
   exports: [AuthService]
 })
 export class AuthModule { }

@@ -196,4 +196,48 @@ export class AuthService {
 
     return new ApiResponseDto(true, 'Đặt lại mật khẩu thành công.', null);
   }
+
+  /**
+   * Login với Google OAuth
+   */
+  async googleLogin(req: any): Promise<IAuthResult> {
+    if (!req.user) {
+      throw new InvalidCredentialsException();
+    }
+    const { email, firstName, lastName, picture } = req.user;
+
+    let user = await this.prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (!user) {
+      user = await this.prisma.user.create({
+        data: {
+          email,
+          fullName: `${firstName} ${lastName}`.trim(),
+          avatar: picture,
+          provider: AuthProvider.GOOGLE,
+          role: Role.USER,
+          isActive: true,
+        },
+      });
+    }
+
+    const payload = {
+      sub: user.id.toString(),
+      email: user.email,
+      role: user.role,
+    };
+
+    const accessToken = this.jwtService.generateAccessToken(payload);
+    const refreshToken = this.jwtService.generateRefreshToken(payload);
+
+    const { passwordHash, ...safeUser } = user;
+
+    return {
+      accessToken,
+      refreshToken,
+      user: safeUser,
+    };
+  }
 }
