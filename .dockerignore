@@ -1,0 +1,28 @@
+# Git
+.git
+.gitignore
+.github
+
+# Node & Build
+node_modules
+dist
+npm-debug.log
+yarn-error.log
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+
+# Docker & Meta
+README.md
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.override.yml
+
+# IDEs and OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
