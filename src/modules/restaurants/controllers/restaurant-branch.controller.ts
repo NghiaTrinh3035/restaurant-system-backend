@@ -15,8 +15,9 @@ import { ResponseMessage } from 'src/core/common/decorators/response-message.dec
 
 import { Role } from '@prisma/client';
 
-import { JwtAuthGuard } from 'src/core/common/guards/jwt-auth.guard';
 
+import { JwtAuthGuard } from 'src/core/common/guards/jwt-auth.guard';
+import { RolesGuard } from 'src/core/common/guards/roles.guard';
 import { CreateRestaurantBranchDto } from '../dto/create-restaurant-branch.dto';
 import { Public } from 'src/core/common/decorators/public.decorator';
 import { Roles } from 'src/core/common/decorators/roles.decorator';
@@ -51,7 +52,7 @@ export class RestaurantBranchController {
     // ADMIN ONLY
     @Post()
     @HttpCode(HttpStatus.CREATED)
-    @UseGuards(JwtAuthGuard)
+    @UseGuards(JwtAuthGuard, RolesGuard)
     @Roles(Role.ADMIN)
     @ResponseMessage('Thêm chi nhánh nhà hàng thành công.')
     async createRestaurantBranch(

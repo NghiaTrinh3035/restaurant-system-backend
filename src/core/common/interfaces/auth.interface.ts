@@ -1,10 +1,11 @@
 import { Request } from 'express';
 import { ICurrentUser } from './current-user.interface';
+import { Role } from '@prisma/client';
 
 export interface IJwtPayload {
   sub: string;
   email: string;
-  role: string;
+  role: Role;
 }
 
 export interface IAuthResult {

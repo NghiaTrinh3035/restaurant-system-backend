@@ -2,6 +2,7 @@ import {
     CanActivate,
     ExecutionContext,
     Injectable,
+    ForbiddenException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Role } from '@prisma/client';
@@ -14,14 +15,13 @@ export class RolesGuard implements CanActivate {
     ) { }
 
     canActivate(context: ExecutionContext): boolean {
-        const requiredRoles =
-            this.reflector.getAllAndOverride<Role[]>(
-                ROLES_KEY,
-                [
-                    context.getHandler(),
-                    context.getClass(),
-                ],
-            );
+        const requiredRoles = this.reflector.getAllAndOverride<Role[]>(
+            ROLES_KEY,
+            [
+                context.getHandler(),
+                context.getClass(),
+            ],
+        );
 
         // Endpoint không yêu cầu role
         if (!requiredRoles || requiredRoles.length === 0) {
@@ -29,13 +29,20 @@ export class RolesGuard implements CanActivate {
         }
 
         const request = context.switchToHttp().getRequest();
-
         const user = request.user;
 
         if (!user) {
-            return false;
+            throw new ForbiddenException(
+                'User information not found',
+            );
         }
 
-        return requiredRoles.includes(user.role);
+        if (!requiredRoles.includes(user.role)) {
+            throw new ForbiddenException(
+                'You do not have permission to access this resource',
+            );
+        }
+
+        return true;
     }
 }

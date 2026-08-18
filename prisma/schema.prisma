@@ -104,4 +104,5 @@ enum RestaurantTableStatus {
   AVAILABLE
   OCCUPIED
   MAINTENANCE
+  DIRTY
 }
