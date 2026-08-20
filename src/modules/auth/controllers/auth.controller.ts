@@ -28,8 +28,33 @@ export class AuthController {
   @ResponseMessage('Đăng ký thành công')
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
-  async register(@Body() body: RegisterDto) {
-    return this.authService.register(body);
+  async register(
+    @Body() body: RegisterDto,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    const result = await this.authService.register(body);
+    const isProduction = process.env.NODE_ENV !== 'development';
+
+    const cookieOptions: CookieOptions = {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? 'none' : 'lax',
+    };
+
+    const accessTime = process.env.JWT_ACCESS_EXPIRES_IN || '1d';
+    const refreshTime = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
+
+    res.cookie('accessToken', result.accessToken, {
+      ...cookieOptions,
+      maxAge: ms(accessTime as StringValue),
+    });
+
+    res.cookie('refreshToken', result.refreshToken, {
+      ...cookieOptions,
+      maxAge: ms(refreshTime as StringValue),
+    });
+
+    return { user: result.user };
   }
 
   @Public()
@@ -63,7 +88,7 @@ export class AuthController {
       maxAge: ms(refreshTime as StringValue),
     });
 
-    return result;
+    return { user: result.user };
   }
 
   @Public()
