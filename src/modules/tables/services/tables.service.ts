@@ -130,6 +130,7 @@ export class TablesService {
       where: { branchId },
       include: {
         tableType: true,
+        branch: true,
       },
       orderBy: [
         { floor: 'asc' },
