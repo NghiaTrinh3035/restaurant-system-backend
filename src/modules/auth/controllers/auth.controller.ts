@@ -1,7 +1,7 @@
 import { Body, Controller, HttpCode, HttpStatus, Post, Get, Req, UseGuards, Res } from '@nestjs/common';
-import type { Response, CookieOptions } from 'express';
-import ms, { type StringValue } from 'ms';
+import type { Request, Response, CookieOptions } from 'express';
 import { AuthService } from '../services/auth.service';
+import { AuthCookieService } from '../services/auth-cookie.service';
 import { RegisterDto } from '../dtos/register.dto';
 import { LoginDto } from '../dtos/login.dto';
 import { RequestRegisterOtpDto } from '../dtos/request-register-otp.dto';
@@ -14,7 +14,10 @@ import { GoogleAuthGuard } from 'src/core/common/guards/google-auth.guard';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) { }
+  constructor(
+    private readonly authService: AuthService,
+    private readonly authCookieService: AuthCookieService,
+  ) { }
 
   @Public()
   @ResponseMessage('OTP đã được gửi thành công')
@@ -33,27 +36,7 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response
   ) {
     const result = await this.authService.register(body);
-    const isProduction = process.env.NODE_ENV !== 'development';
-
-    const cookieOptions: CookieOptions = {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'none' : 'lax',
-    };
-
-    const accessTime = process.env.JWT_ACCESS_EXPIRES_IN || '1d';
-    const refreshTime = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
-
-    res.cookie('accessToken', result.accessToken, {
-      ...cookieOptions,
-      maxAge: ms(accessTime as StringValue),
-    });
-
-    res.cookie('refreshToken', result.refreshToken, {
-      ...cookieOptions,
-      maxAge: ms(refreshTime as StringValue),
-    });
-
+    this.authCookieService.setAuthCookies(res, result.accessToken, result.refreshToken);
     return { user: result.user };
   }
 
@@ -66,28 +49,21 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response
   ) {
     const result = await this.authService.login(body);
-    const isProduction = process.env.NODE_ENV !== 'development';
+    this.authCookieService.setAuthCookies(res, result.accessToken, result.refreshToken);
+    return { user: result.user };
+  }
 
-    // Định nghĩa chuẩn type CookieOptions của express
-    const cookieOptions: CookieOptions = {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'none' : 'lax',
-    };
-
-    const accessTime = process.env.JWT_ACCESS_EXPIRES_IN || '1d';
-    const refreshTime = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
-
-    res.cookie('accessToken', result.accessToken, {
-      ...cookieOptions,
-      maxAge: ms(accessTime as StringValue),
-    });
-
-    res.cookie('refreshToken', result.refreshToken, {
-      ...cookieOptions,
-      maxAge: ms(refreshTime as StringValue),
-    });
-
+  @Public()
+  @ResponseMessage('Cấp lại token thành công')
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  async refresh(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    const oldRefreshToken = req.cookies?.refreshToken;
+    const result = await this.authService.refreshToken(oldRefreshToken);
+    this.authCookieService.setAuthCookies(res, result.accessToken, result.refreshToken);
     return { user: result.user };
   }
 
@@ -118,18 +94,16 @@ export class AuthController {
   @ResponseMessage('Đăng xuất thành công')
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  async logout(@Res({ passthrough: true }) res: Response) {
-    const isProduction = process.env.NODE_ENV !== 'development';
+  async logout(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    const oldRefreshToken = req.cookies?.refreshToken;
+    if (oldRefreshToken) {
+      await this.authService.revokeToken(oldRefreshToken);
+    }
 
-    const cookieOptions: CookieOptions = {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'none' : 'lax',
-    };
-
-    res.clearCookie('accessToken', cookieOptions);
-    res.clearCookie('refreshToken', cookieOptions);
-
+    this.authCookieService.clearAuthCookies(res);
     return null;
   }
 
@@ -145,26 +119,7 @@ export class AuthController {
   @UseGuards(GoogleAuthGuard)
   async googleAuthRedirect(@Req() req: Request, @Res() res: Response) {
     const result = await this.authService.googleLogin(req);
-    const isProduction = process.env.NODE_ENV !== 'development';
-
-    const cookieOptions: CookieOptions = {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'none' : 'lax',
-    };
-
-    const accessTime = process.env.JWT_ACCESS_EXPIRES_IN || '1d';
-    const refreshTime = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
-
-    res.cookie('accessToken', result.accessToken, {
-      ...cookieOptions,
-      maxAge: ms(accessTime as StringValue),
-    });
-
-    res.cookie('refreshToken', result.refreshToken, {
-      ...cookieOptions,
-      maxAge: ms(refreshTime as StringValue),
-    });
+    this.authCookieService.setAuthCookies(res, result.accessToken, result.refreshToken);
 
     const frontendUrl = process.env.APP_PUBLIC_URL || 'http://localhost:5173';
     return res.redirect(frontendUrl);
