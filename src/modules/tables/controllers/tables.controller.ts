@@ -4,6 +4,7 @@ import { CreateTableTypeDto } from '../dto/table-type.dto';
 import { CreateRestaurantTableDto } from '../dto/restaurant-table.dto';
 import { UpdateTableTypeDto } from '../dto/update-table-type.dto';
 import { UpdateRestaurantTableDto } from '../dto/update-restaurant-table.dto';
+import { BulkCreateRestaurantTableDto } from '../dto/bulk-create-restaurant-table.dto';
 import { JwtAuthGuard } from 'src/core/common/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/core/common/guards/roles.guard';
 import { Roles } from 'src/core/common/decorators/roles.decorator';
@@ -64,6 +65,14 @@ export class TablesController {
   @ResponseMessage('Tạo bàn thành công')
   createRestaurantTable(@Body() dto: CreateRestaurantTableDto) {
     return this.tablesService.createRestaurantTable(dto);
+  }
+
+  @Post('bulk')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @ResponseMessage('Tạo hàng loạt bàn thành công')
+  bulkCreateRestaurantTables(@Body() dto: BulkCreateRestaurantTableDto) {
+    return this.tablesService.bulkCreateRestaurantTables(dto);
   }
 
   @Get()
