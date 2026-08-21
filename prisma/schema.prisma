@@ -34,6 +34,50 @@ model RefreshToken {
   user      User     @relation(fields: [userId], references: [id])
 }
 
+model RestaurantBranch {
+  id        String                 @id @default(uuid()) @db.Uuid
+  name      String
+  address   String
+  phone     String
+  latitude  Float                  @db.DoublePrecision
+  longitude Float                  @db.DoublePrecision
+  status    RestaurantBranchStatus @default(ACTIVE)
+  createdAt DateTime               @default(now())
+  updatedAt DateTime               @updatedAt
+
+  tables RestaurantTable[]
+
+  @@map("restaurant_branches")
+}
+
+model TableType {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  capacity    Int
+  description String?
+
+  tables RestaurantTable[]
+
+  @@map("table_types")
+}
+
+model RestaurantTable {
+  id          String                @id @default(uuid()) @db.Uuid
+  tableNumber String
+  floor       Int
+  status      RestaurantTableStatus @default(AVAILABLE)
+  note        String?
+
+  branchId    String @db.Uuid
+  tableTypeId String @db.Uuid
+
+  branch    RestaurantBranch @relation(fields: [branchId], references: [id])
+  tableType TableType        @relation(fields: [tableTypeId], references: [id])
+
+  @@unique([branchId, tableNumber])
+  @@map("restaurant_tables")
+}
+
 enum Role {
   USER
   STAFF
@@ -49,4 +93,16 @@ enum Gender {
   MALE
   FEMALE
   OTHER
+}
+
+enum RestaurantBranchStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum RestaurantTableStatus {
+  AVAILABLE
+  OCCUPIED
+  MAINTENANCE
+  DIRTY
 }

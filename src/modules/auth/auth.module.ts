@@ -8,6 +8,8 @@ import { MailModule } from 'src/mail/mail.module';
 import { AuthJwtModule } from 'src/core/security/jwt/jwt.module';
 import { GoogleStrategy } from 'src/core/security/google/google.strategy';
 
+import { AuthCookieService } from './services/auth-cookie.service';
+
 @Module({
   imports: [
     ConfigModule,
@@ -15,7 +17,7 @@ import { GoogleStrategy } from 'src/core/security/google/google.strategy';
     AuthJwtModule
   ],
   controllers: [AuthController],
-  providers: [AuthService, OtpService, PasswordService, GoogleStrategy],
+  providers: [AuthService, OtpService, PasswordService, GoogleStrategy, AuthCookieService],
   exports: [AuthService]
 })
 export class AuthModule { }

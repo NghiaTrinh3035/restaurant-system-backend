@@ -1,4 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
+import * as crypto from 'crypto';
+import ms from 'ms';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { RegisterDto } from '../dtos/register.dto';
 import { RequestRegisterOtpDto } from '../dtos/request-register-otp.dto';
@@ -115,6 +117,8 @@ export class AuthService {
     const accessToken = this.jwtService.generateAccessToken(payload);
     const refreshToken = this.jwtService.generateRefreshToken(payload);
 
+    await this.saveRefreshToken(newUser.id.toString(), refreshToken);
+
     const { passwordHash, ...safeUser } = newUser;
 
     return {
@@ -151,6 +155,8 @@ export class AuthService {
 
     const accessToken = this.jwtService.generateAccessToken(payload);
     const refreshToken = this.jwtService.generateRefreshToken(payload);
+
+    await this.saveRefreshToken(user.id.toString(), refreshToken);
 
     const { passwordHash, ...safeUser } = user;
 
@@ -194,6 +200,12 @@ export class AuthService {
       data: { passwordHash: hashedPassword },
     });
 
+    // Thu hồi tất cả các token cũ
+    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    if (user) {
+      await this.revokeAllUserTokens(user.id.toString());
+    }
+
     return new ApiResponseDto(true, 'Đặt lại mật khẩu thành công.', null);
   }
 
@@ -232,6 +244,8 @@ export class AuthService {
     const accessToken = this.jwtService.generateAccessToken(payload);
     const refreshToken = this.jwtService.generateRefreshToken(payload);
 
+    await this.saveRefreshToken(user.id.toString(), refreshToken);
+
     const { passwordHash, ...safeUser } = user;
 
     return {
@@ -239,5 +253,105 @@ export class AuthService {
       refreshToken,
       user: safeUser,
     };
+  }
+
+  private hashToken(token: string): string {
+    return crypto.createHash('sha256').update(token).digest('hex');
+  }
+
+  private async saveRefreshToken(userId: string, token: string): Promise<void> {
+    const refreshTime = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
+    const expiresAt = new Date(Date.now() + ms(refreshTime as any));
+
+    await this.prisma.refreshToken.create({
+      data: {
+        userId,
+        tokenHash: this.hashToken(token),
+        expiresAt,
+      },
+    });
+  }
+
+  async refreshToken(refreshToken: string): Promise<IAuthResult> {
+    if (!refreshToken) {
+      throw new UnauthorizedException('Refresh token is required');
+    }
+
+    try {
+      const payload = this.jwtService.verifyRefreshToken(refreshToken);
+      const tokenHash = this.hashToken(refreshToken);
+
+      const storedToken = await this.prisma.refreshToken.findFirst({
+        where: {
+          userId: payload.sub,
+          tokenHash,
+        },
+      });
+
+      if (!storedToken) {
+        throw new UnauthorizedException('Invalid refresh token');
+      }
+
+      if (storedToken.revoked) {
+        // Phát hiện token đã bị thu hồi mà còn dùng lại -> Rủi ro, thu hồi tất cả
+        await this.revokeAllUserTokens(payload.sub);
+        throw new UnauthorizedException('Refresh token has been revoked. All sessions terminated.');
+      }
+
+      if (storedToken.expiresAt < new Date()) {
+        throw new UnauthorizedException('Refresh token expired');
+      }
+
+      // Xoay vòng (Rotate): Đánh dấu token cũ là revoked
+      await this.prisma.refreshToken.update({
+        where: { id: storedToken.id },
+        data: { revoked: true },
+      });
+
+      const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
+      if (!user || !user.isActive) {
+        throw new UnauthorizedException('User is not active or not found');
+      }
+
+      const newPayload = {
+        sub: user.id.toString(),
+        email: user.email,
+        role: user.role,
+      };
+
+      const newAccessToken = this.jwtService.generateAccessToken(newPayload);
+      const newRefreshToken = this.jwtService.generateRefreshToken(newPayload);
+
+      await this.saveRefreshToken(user.id.toString(), newRefreshToken);
+
+      const { passwordHash, ...safeUser } = user;
+
+      return {
+        accessToken: newAccessToken,
+        refreshToken: newRefreshToken,
+        user: safeUser,
+      };
+    } catch (e) {
+      if (e instanceof UnauthorizedException) {
+        throw e;
+      }
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+  }
+
+  async revokeToken(refreshToken: string): Promise<void> {
+    if (!refreshToken) return;
+    const tokenHash = this.hashToken(refreshToken);
+    await this.prisma.refreshToken.updateMany({
+      where: { tokenHash },
+      data: { revoked: true },
+    });
+  }
+
+  async revokeAllUserTokens(userId: string): Promise<void> {
+    await this.prisma.refreshToken.updateMany({
+      where: { userId },
+      data: { revoked: true },
+    });
   }
 }
