@@ -131,12 +131,14 @@ export class TablesService {
       },
     });
 
-    if (existingTables.length > 0) {
-      const duplicateNames = existingTables.map(t => t.tableNumber).join(', ');
-      throw new ConflictException(`Các bàn sau đã tồn tại trong chi nhánh này: ${duplicateNames}`);
+    const existingTableNumbers = existingTables.map(t => t.tableNumber);
+    const newTableNumbers = tableNumbers.filter(num => !existingTableNumbers.includes(num));
+
+    if (newTableNumbers.length === 0) {
+      throw new ConflictException('Tất cả các bàn được yêu cầu tạo đều đã tồn tại trong chi nhánh này.');
     }
 
-    const tablesData = tableNumbers.map(tableNumber => ({
+    const tablesData = newTableNumbers.map(tableNumber => ({
       tableNumber,
       floor: dto.floor,
       status: dto.status ?? RestaurantTableStatus.AVAILABLE,
@@ -149,8 +151,12 @@ export class TablesService {
       data: tablesData,
     });
 
+    const message = existingTables.length > 0 
+      ? `Tạo thành công ${result.count} bàn (Đã bỏ qua ${existingTables.length} bàn bị trùng: ${existingTableNumbers.join(', ')})`
+      : 'Tạo hàng loạt bàn thành công';
+
     return {
-      message: 'Tạo hàng loạt bàn thành công',
+      message: message,
       count: result.count,
     };
   }
