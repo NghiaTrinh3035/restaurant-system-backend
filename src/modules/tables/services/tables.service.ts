@@ -5,7 +5,12 @@ import { CreateTableTypeDto } from '../dto/table-type.dto';
 import { UpdateRestaurantTableDto } from '../dto/update-restaurant-table.dto';
 import { UpdateTableTypeDto } from '../dto/update-table-type.dto';
 import { BulkCreateRestaurantTableDto } from '../dto/bulk-create-restaurant-table.dto';
-import { RestaurantTableStatus } from '@prisma/client';
+import { QueryTableTypeDto } from '../dto/query-table-type.dto';
+import { QueryRestaurantTableDto } from '../dto/query-restaurant-table.dto';
+import { RestaurantTableStatus, Prisma } from '@prisma/client';
+
+import { PaginationQueryDto } from 'src/core/dto/pagination-query.dto';
+import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
 
 @Injectable()
 export class TablesService {
@@ -19,8 +24,46 @@ export class TablesService {
     return this.prisma.tableType.create({ data: dto });
   }
 
-  async getTableTypes() {
-    return this.prisma.tableType.findMany();
+  async getTableTypes(query?: QueryTableTypeDto) {
+    const where: Prisma.TableTypeWhereInput = {};
+
+    if (query?.capacity) {
+      where.capacity = query.capacity;
+    }
+
+    if (query?.search && query.search.trim()) {
+      const term = query.search.trim();
+      where.OR = [
+        { name: { contains: term, mode: 'insensitive' } },
+        { description: { contains: term, mode: 'insensitive' } },
+      ];
+    }
+
+    if (!query || (!query.page && !query.limit && !query.search && !query.capacity)) {
+      return this.prisma.tableType.findMany({
+        where,
+        orderBy: { capacity: 'asc' },
+      });
+    }
+
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const [items, totalItems] = await Promise.all([
+      this.prisma.tableType.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { capacity: 'asc' },
+      }),
+      this.prisma.tableType.count({ where }),
+    ]);
+
+    return {
+      items,
+      meta: new PaginationMetaDto(page, limit, totalItems),
+    };
   }
 
   async getTableTypeById(id: string) {
@@ -161,13 +204,74 @@ export class TablesService {
     };
   }
 
-  async getRestaurantTables() {
-    return this.prisma.restaurantTable.findMany({
-      include: {
-        branch: true,
-        tableType: true,
-      },
-    });
+  async getRestaurantTables(query?: QueryRestaurantTableDto) {
+    const where: Prisma.RestaurantTableWhereInput = {};
+
+    if (query?.branchId && query.branchId !== 'ALL') {
+      where.branchId = query.branchId;
+    }
+
+    if (query?.tableTypeId && query.tableTypeId !== 'ALL') {
+      where.tableTypeId = query.tableTypeId;
+    }
+
+    if (query?.status) {
+      where.status = query.status;
+    }
+
+    if (query?.floor) {
+      where.floor = query.floor;
+    }
+
+    if (query?.search && query.search.trim()) {
+      const term = query.search.trim();
+      where.OR = [
+        { tableNumber: { contains: term, mode: 'insensitive' } },
+        { note: { contains: term, mode: 'insensitive' } },
+      ];
+    }
+
+    if (!query || (!query.page && !query.limit && !query.search && !query.branchId && !query.tableTypeId && !query.status && !query.floor)) {
+      return this.prisma.restaurantTable.findMany({
+        where,
+        include: {
+          branch: true,
+          tableType: true,
+        },
+        orderBy: [
+          { branch: { name: 'asc' } },
+          { floor: 'asc' },
+          { tableNumber: 'asc' },
+        ],
+      });
+    }
+
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const [items, totalItems] = await Promise.all([
+      this.prisma.restaurantTable.findMany({
+        where,
+        skip,
+        take: limit,
+        include: {
+          branch: true,
+          tableType: true,
+        },
+        orderBy: [
+          { branch: { name: 'asc' } },
+          { floor: 'asc' },
+          { tableNumber: 'asc' },
+        ],
+      }),
+      this.prisma.restaurantTable.count({ where }),
+    ]);
+
+    return {
+      items,
+      meta: new PaginationMetaDto(page, limit, totalItems),
+    };
   }
 
   async getRestaurantTableById(id: string) {
