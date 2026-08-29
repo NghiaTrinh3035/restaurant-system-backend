@@ -24,8 +24,18 @@ export class MenuCategoriesService {
 
   async findAll(query?: QueryMenuCategoriesDto) {
     const where: Prisma.MenuCategoryWhereInput = {};
-    if (!query?.includeInactive) {
+
+    if (query?.isActive !== undefined) {
+      where.isActive = query.isActive;
+    } else if (!query?.includeInactive) {
       where.isActive = true;
+    }
+
+    if (query?.search && query.search.trim()) {
+      where.name = {
+        contains: query.search.trim(),
+        mode: 'insensitive',
+      };
     }
 
     const page = Number(query?.page) || 1;

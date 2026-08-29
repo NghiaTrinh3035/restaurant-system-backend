@@ -25,7 +25,7 @@ import { Public } from 'src/core/common/decorators/public.decorator';
 import { Roles } from 'src/core/common/decorators/roles.decorator';
 import { UpdateRestaurantBranchDto } from '../dto/update-restaurant-branch.dto';
 
-import { PaginationQueryDto } from 'src/core/dto/pagination-query.dto';
+import { QueryRestaurantBranchDto } from '../dto/query-restaurant-branch.dto';
 import { Query } from '@nestjs/common';
 
 @Controller('/restaurants/branches')
@@ -40,7 +40,7 @@ export class RestaurantBranchController {
     @Public()
     @HttpCode(HttpStatus.OK)
     @ResponseMessage('Lấy danh sách chi nhánh nhà hàng thành công.')
-    async getRestaurantBranches(@Query() query: PaginationQueryDto) {
+    async getRestaurantBranches(@Query() query: QueryRestaurantBranchDto) {
         return this.restaurantBranchService.getRestaurantBranches(query);
     }
 
