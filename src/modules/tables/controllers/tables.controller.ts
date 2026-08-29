@@ -1,10 +1,11 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { TablesService } from '../services/tables.service';
 import { CreateTableTypeDto } from '../dto/table-type.dto';
 import { CreateRestaurantTableDto } from '../dto/restaurant-table.dto';
 import { UpdateTableTypeDto } from '../dto/update-table-type.dto';
 import { UpdateRestaurantTableDto } from '../dto/update-restaurant-table.dto';
 import { BulkCreateRestaurantTableDto } from '../dto/bulk-create-restaurant-table.dto';
+import { PaginationQueryDto } from 'src/core/dto/pagination-query.dto';
 import { JwtAuthGuard } from 'src/core/common/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/core/common/guards/roles.guard';
 import { Roles } from 'src/core/common/decorators/roles.decorator';
@@ -29,8 +30,8 @@ export class TablesController {
 
   @Get('types')
   @ResponseMessage('Lấy danh sách loại bàn thành công')
-  getTableTypes() {
-    return this.tablesService.getTableTypes();
+  getTableTypes(@Query() query: PaginationQueryDto) {
+    return this.tablesService.getTableTypes(query);
   }
 
   @Get('types/:id')
@@ -77,8 +78,8 @@ export class TablesController {
 
   @Get()
   @ResponseMessage('Lấy danh sách bàn thành công')
-  getRestaurantTables() {
-    return this.tablesService.getRestaurantTables();
+  getRestaurantTables(@Query() query: PaginationQueryDto) {
+    return this.tablesService.getRestaurantTables(query);
   }
 
   @Get('branch/:branchId')

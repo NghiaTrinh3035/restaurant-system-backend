@@ -34,8 +34,18 @@ export class TransformInterceptor<T>
         if (data && typeof data === 'object' && 'success' in data && 'message' in data) {
           return data;
         }
+
+        // If data has items & meta (Paginated result)
+        if (data && typeof data === 'object' && 'items' in data && 'meta' in data) {
+          return new ApiResponseDto(true, responseMessage, (data as any).items, (data as any).meta);
+        }
+
+        // If data has data & meta
+        if (data && typeof data === 'object' && 'data' in data && 'meta' in data) {
+          return new ApiResponseDto(true, responseMessage, (data as any).data, (data as any).meta);
+        }
         
-        // Wrap the response
+        // Wrap the standard response
         return new ApiResponseDto(true, responseMessage, data);
       }),
     );

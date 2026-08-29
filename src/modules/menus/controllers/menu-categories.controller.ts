@@ -14,6 +14,7 @@ import {
 import { MenuCategoriesService } from '../services/menu-categories.service';
 import { CreateMenuCategoryDto } from '../dto/create-menu-category.dto';
 import { UpdateMenuCategoryDto } from '../dto/update-menu-category.dto';
+import { QueryMenuCategoriesDto } from '../dto/query-menu-categories.dto';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Public } from '../../../core/common/decorators/public.decorator';
 import { Roles } from '../../../core/common/decorators/roles.decorator';
@@ -30,11 +31,10 @@ export class MenuCategoriesController {
   @Get()
   @Public()
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Lấy danh sách danh mục món ăn' })
+  @ApiOperation({ summary: 'Lấy danh sách danh mục món ăn (hỗ trợ phân trang)' })
   @ResponseMessage('Lấy danh sách danh mục món ăn thành công.')
-  findAll(@Query('includeInactive') includeInactive?: string) {
-    const include = includeInactive === 'true';
-    return this.menuCategoriesService.findAll(include);
+  findAll(@Query() query: QueryMenuCategoriesDto) {
+    return this.menuCategoriesService.findAll(query);
   }
 
   // PUBLIC

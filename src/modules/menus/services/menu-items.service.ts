@@ -3,6 +3,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { CreateMenuItemDto } from '../dto/create-menu-item.dto';
 import { UpdateMenuItemDto } from '../dto/update-menu-item.dto';
 import { QueryMenuItemsDto } from '../dto/query-menu-items.dto';
+import { PaginationMetaDto } from '../../../core/dto/api-response.dto';
 import { Prisma } from '@prisma/client';
 
 @Injectable()
@@ -64,16 +65,32 @@ export class MenuItemsService {
       ];
     }
 
-    return this.prisma.menuItem.findMany({
-      where,
-      include: {
-        category: true,
-      },
-      orderBy: [
-        { category: { order: 'asc' } },
-        { createdAt: 'desc' },
-      ],
-    });
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const [items, totalItems] = await Promise.all([
+      this.prisma.menuItem.findMany({
+        where,
+        skip,
+        take: limit,
+        include: {
+          category: true,
+        },
+        orderBy: [
+          { category: { order: 'asc' } },
+          { createdAt: 'desc' },
+        ],
+      }),
+      this.prisma.menuItem.count({ where }),
+    ]);
+
+    const meta = new PaginationMetaDto(page, limit, totalItems);
+
+    return {
+      items,
+      meta,
+    };
   }
 
   async findOne(id: string) {

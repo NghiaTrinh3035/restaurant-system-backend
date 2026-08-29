@@ -7,6 +7,9 @@ import { UpdateTableTypeDto } from '../dto/update-table-type.dto';
 import { BulkCreateRestaurantTableDto } from '../dto/bulk-create-restaurant-table.dto';
 import { RestaurantTableStatus } from '@prisma/client';
 
+import { PaginationQueryDto } from 'src/core/dto/pagination-query.dto';
+import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
+
 @Injectable()
 export class TablesService {
   constructor(private readonly prisma: PrismaService) { }
@@ -19,8 +22,27 @@ export class TablesService {
     return this.prisma.tableType.create({ data: dto });
   }
 
-  async getTableTypes() {
-    return this.prisma.tableType.findMany();
+  async getTableTypes(query?: PaginationQueryDto) {
+    if (!query || (!query.page && !query.limit)) {
+      return this.prisma.tableType.findMany();
+    }
+
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const [items, totalItems] = await Promise.all([
+      this.prisma.tableType.findMany({
+        skip,
+        take: limit,
+      }),
+      this.prisma.tableType.count(),
+    ]);
+
+    return {
+      items,
+      meta: new PaginationMetaDto(page, limit, totalItems),
+    };
   }
 
   async getTableTypeById(id: string) {
@@ -161,13 +183,41 @@ export class TablesService {
     };
   }
 
-  async getRestaurantTables() {
-    return this.prisma.restaurantTable.findMany({
-      include: {
-        branch: true,
-        tableType: true,
-      },
-    });
+  async getRestaurantTables(query?: PaginationQueryDto) {
+    if (!query || (!query.page && !query.limit)) {
+      return this.prisma.restaurantTable.findMany({
+        include: {
+          branch: true,
+          tableType: true,
+        },
+      });
+    }
+
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const [items, totalItems] = await Promise.all([
+      this.prisma.restaurantTable.findMany({
+        skip,
+        take: limit,
+        include: {
+          branch: true,
+          tableType: true,
+        },
+        orderBy: [
+          { branch: { name: 'asc' } },
+          { floor: 'asc' },
+          { tableNumber: 'asc' },
+        ],
+      }),
+      this.prisma.restaurantTable.count(),
+    ]);
+
+    return {
+      items,
+      meta: new PaginationMetaDto(page, limit, totalItems),
+    };
   }
 
   async getRestaurantTableById(id: string) {

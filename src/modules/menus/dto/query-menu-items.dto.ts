@@ -1,8 +1,9 @@
 import { IsOptional, IsString, IsUUID, IsBoolean } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
+import { PaginationQueryDto } from '../../../core/dto/pagination-query.dto';
 
-export class QueryMenuItemsDto {
+export class QueryMenuItemsDto extends PaginationQueryDto {
   @ApiPropertyOptional({ description: 'Lọc theo ID danh mục món ăn' })
   @IsUUID()
   @IsOptional()
