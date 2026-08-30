@@ -20,6 +20,7 @@ model MenuItem {
   price           Decimal      @db.Decimal(12, 2)
   originalPrice   Decimal?     @db.Decimal(12, 2)
   imageUrl        String?
+  isAvailable     Boolean      @default(true)
   isFeatured      Boolean      @default(false)
   preparationTime Int?
   isActive        Boolean      @default(true)

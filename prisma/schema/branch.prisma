@@ -1,7 +1,10 @@
 model RestaurantBranch {
   id                  String                 @id @default(uuid()) @db.Uuid
   name                String
-  address             String
+  address             String?
+  streetAddress       String?
+  provinceCode        String?
+  wardCode            String?
   phone               String
   latitude            Float                  @db.DoublePrecision
   longitude           Float                  @db.DoublePrecision
@@ -13,6 +16,8 @@ model RestaurantBranch {
   createdAt           DateTime               @default(now())
   updatedAt           DateTime               @updatedAt
 
+  province            Province?              @relation(fields: [provinceCode], references: [code])
+  ward                Ward?                  @relation(fields: [wardCode], references: [code])
   tables              RestaurantTable[]
   staff               User[]
   branchMenuItems     BranchMenuItem[]

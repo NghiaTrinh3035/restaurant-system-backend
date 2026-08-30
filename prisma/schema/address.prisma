@@ -1,0 +1,21 @@
+model Province {
+  code     String             @id
+  name     String
+  level    String
+  wards    Ward[]
+  branches RestaurantBranch[]
+
+  @@map("provinces")
+}
+
+model Ward {
+  code         String             @id
+  name         String
+  fullName     String
+  level        String
+  provinceCode String
+  province     Province           @relation(fields: [provinceCode], references: [code])
+  branches     RestaurantBranch[]
+
+  @@map("wards")
+}
