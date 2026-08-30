@@ -5,6 +5,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
 model User {
@@ -35,17 +36,21 @@ model RefreshToken {
 }
 
 model RestaurantBranch {
-  id        String                 @id @default(uuid()) @db.Uuid
-  name      String
-  address   String
-  phone     String
-  latitude  Float                  @db.DoublePrecision
-  longitude Float                  @db.DoublePrecision
-  status    RestaurantBranchStatus @default(ACTIVE)
-  createdAt DateTime               @default(now())
-  updatedAt DateTime               @updatedAt
+  id            String                 @id @default(uuid()) @db.Uuid
+  name          String
+  streetAddress String
+  provinceCode  String
+  wardCode      String
+  phone         String
+  latitude      Float                  @db.DoublePrecision
+  longitude     Float                  @db.DoublePrecision
+  status        RestaurantBranchStatus @default(ACTIVE)
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
 
-  tables RestaurantTable[]
+  province Province          @relation(fields: [provinceCode], references: [code])
+  ward     Ward              @relation(fields: [wardCode], references: [code])
+  tables   RestaurantTable[]
 
   @@map("restaurant_branches")
 }
@@ -108,37 +113,59 @@ enum RestaurantTableStatus {
 }
 
 model MenuCategory {
-  id          String     @id @default(uuid()) @db.Uuid
-  name        String     @unique
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique
   description String?
   imageUrl    String?
-  isActive    Boolean    @default(true)
-  order       Int        @default(0)
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  isActive    Boolean  @default(true)
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  items       MenuItem[]
+  items MenuItem[]
 
   @@map("menu_categories")
 }
 
 model MenuItem {
-  id              String       @id @default(uuid()) @db.Uuid
+  id              String   @id @default(uuid()) @db.Uuid
   name            String
   description     String?
-  price           Decimal      @db.Decimal(12, 2)
-  originalPrice   Decimal?     @db.Decimal(12, 2)
+  price           Decimal  @db.Decimal(12, 2)
+  originalPrice   Decimal? @db.Decimal(12, 2)
   imageUrl        String?
-  isAvailable     Boolean      @default(true)
-  isFeatured      Boolean      @default(false)
+  isAvailable     Boolean  @default(true)
+  isFeatured      Boolean  @default(false)
   preparationTime Int?
-  isActive        Boolean      @default(true)
+  isActive        Boolean  @default(true)
 
-  categoryId      String       @db.Uuid
-  category        MenuCategory @relation(fields: [categoryId], references: [id])
+  categoryId String       @db.Uuid
+  category   MenuCategory @relation(fields: [categoryId], references: [id])
 
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("menu_items")
+}
+
+model Province {
+  code     String             @id
+  name     String
+  level    String
+  wards    Ward[]
+  branches RestaurantBranch[]
+
+  @@map("provinces")
+}
+
+model Ward {
+  code         String             @id
+  name         String
+  fullName     String
+  level        String
+  provinceCode String
+  province     Province           @relation(fields: [provinceCode], references: [code])
+  branches     RestaurantBranch[]
+
+  @@map("wards")
 }
