@@ -19,6 +19,10 @@ export class RestaurantBranchService {
         const restaurantBranch =
             await this.prismaService.restaurantBranch.findUnique({
                 where: { id },
+                include: {
+                    province: true,
+                    ward: true,
+                }
             });
 
         if (!restaurantBranch) {
@@ -41,7 +45,7 @@ export class RestaurantBranchService {
             const term = query.search.trim();
             where.OR = [
                 { name: { contains: term, mode: 'insensitive' } },
-                { address: { contains: term, mode: 'insensitive' } },
+                { streetAddress: { contains: term, mode: 'insensitive' } },
                 { phone: { contains: term, mode: 'insensitive' } },
             ];
         }
@@ -52,6 +56,10 @@ export class RestaurantBranchService {
                 orderBy: {
                     name: 'asc',
                 },
+                include: {
+                    province: true,
+                    ward: true,
+                }
             });
         }
 
@@ -67,6 +75,10 @@ export class RestaurantBranchService {
                 orderBy: {
                     name: 'asc',
                 },
+                include: {
+                    province: true,
+                    ward: true,
+                }
             }),
             this.prismaService.restaurantBranch.count({ where }),
         ]);
@@ -80,8 +92,14 @@ export class RestaurantBranchService {
     async createRestaurantBranch(
         dto: CreateRestaurantBranchDto,
     ): Promise<RestaurantBranch> {
+        const { address, ...rest } = dto;
         return this.prismaService.restaurantBranch.create({
-            data: dto,
+            data: {
+                ...rest,
+                provinceCode: address.provinceCode,
+                wardCode: address.wardCode,
+                streetAddress: address.detail,
+            },
         });
     }
 
@@ -91,9 +109,17 @@ export class RestaurantBranchService {
     ): Promise<RestaurantBranch> {
         await this.getRestaurantBranch(id);
 
+        const { address, ...rest } = dto;
+        const dataToUpdate: any = { ...rest };
+        if (address) {
+            dataToUpdate.provinceCode = address.provinceCode;
+            dataToUpdate.wardCode = address.wardCode;
+            dataToUpdate.streetAddress = address.detail;
+        }
+
         return this.prismaService.restaurantBranch.update({
             where: { id },
-            data: dto,
+            data: dataToUpdate,
         });
     }
 
@@ -104,6 +130,19 @@ export class RestaurantBranchService {
 
         return this.prismaService.restaurantBranch.delete({
             where: { id },
+        });
+    }
+
+    async getProvinces() {
+        return this.prismaService.province.findMany({
+            orderBy: { name: 'asc' }
+        });
+    }
+
+    async getWardsByProvince(provinceCode: string) {
+        return this.prismaService.ward.findMany({
+            where: { provinceCode },
+            orderBy: { name: 'asc' }
         });
     }
 }

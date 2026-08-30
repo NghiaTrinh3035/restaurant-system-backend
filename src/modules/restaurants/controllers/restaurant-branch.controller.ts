@@ -36,6 +36,24 @@ export class RestaurantBranchController {
     ) { }
 
     // PUBLIC
+    @Get('/locations/provinces')
+    @Public()
+    @HttpCode(HttpStatus.OK)
+    @ResponseMessage('Lấy danh sách Tỉnh/Thành phố thành công.')
+    async getProvinces() {
+        return this.restaurantBranchService.getProvinces();
+    }
+
+    // PUBLIC
+    @Get('/locations/provinces/:code/wards')
+    @Public()
+    @HttpCode(HttpStatus.OK)
+    @ResponseMessage('Lấy danh sách Phường/Xã thành công.')
+    async getWardsByProvince(@Param('code') code: string) {
+        return this.restaurantBranchService.getWardsByProvince(code);
+    }
+
+    // PUBLIC
     @Get()
     @Public()
     @HttpCode(HttpStatus.OK)
