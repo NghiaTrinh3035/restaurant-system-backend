@@ -1,0 +1,51 @@
+model User {
+  id            String         @id @default(uuid()) @db.Uuid
+  fullName      String
+  email         String         @unique
+  passwordHash  String?
+  provider      AuthProvider   @default(LOCAL)
+  providerId    String?        @unique
+  phone         String?
+  gender        Gender?
+  avatar        String?
+  role          Role           @default(USER)
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  branchId      String?        @db.Uuid
+  branch        RestaurantBranch? @relation(fields: [branchId], references: [id])
+
+  refreshTokens RefreshToken[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  tokenHash String
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+}
+
+enum Role {
+  USER
+  STAFF
+  ADMIN
+}
+
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}

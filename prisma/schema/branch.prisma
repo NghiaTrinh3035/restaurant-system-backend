@@ -1,0 +1,43 @@
+model RestaurantBranch {
+  id                  String                 @id @default(uuid()) @db.Uuid
+  name                String
+  address             String
+  phone               String
+  latitude            Float                  @db.DoublePrecision
+  longitude           Float                  @db.DoublePrecision
+  imageUrl            String?
+  openingTime         String?                @default("08:00")
+  closingTime         String?                @default("22:00")
+  slotDurationMinutes Int                    @default(90)
+  status              RestaurantBranchStatus @default(ACTIVE)
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+
+  tables              RestaurantTable[]
+  staff               User[]
+  branchMenuItems     BranchMenuItem[]
+  operatingHours      BranchOperatingHours[]
+
+  @@map("restaurant_branches")
+}
+
+model BranchOperatingHours {
+  id        String   @id @default(uuid()) @db.Uuid
+  branchId  String   @db.Uuid
+  dayOfWeek Int      // 0: Chủ Nhật, 1: Thứ Hai, ..., 6: Thứ Bảy
+  openTime  String   @default("08:00")
+  closeTime String   @default("22:00")
+  isOpen    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  branch    RestaurantBranch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, dayOfWeek])
+  @@map("branch_operating_hours")
+}
+
+enum RestaurantBranchStatus {
+  ACTIVE
+  INACTIVE
+}
