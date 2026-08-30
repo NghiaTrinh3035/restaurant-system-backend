@@ -98,8 +98,7 @@
     "unrs-resolver@1.12.2": true
   },
   "prisma": {
-    "schema": "prisma/schema",
-    "seed": "ts-node prisma/seed.ts"
+    "schema": "prisma/schema"
   },
   "overrides": {
     "js-yaml": "^5.2.2"
