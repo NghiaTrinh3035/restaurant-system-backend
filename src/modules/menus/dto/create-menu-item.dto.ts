@@ -31,11 +31,6 @@ export class CreateMenuItemDto {
   @IsOptional()
   imageUrl?: string;
 
-  @ApiPropertyOptional({ description: 'Trạng thái còn phục vụ', default: true })
-  @IsBoolean()
-  @IsOptional()
-  isAvailable?: boolean;
-
   @ApiPropertyOptional({ description: 'Món nổi bật / bán chạy', default: false })
   @IsBoolean()
   @IsOptional()

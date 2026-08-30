@@ -21,6 +21,10 @@ model User {
   isActive      Boolean        @default(true)
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
+
+  branchId      String?        @db.Uuid
+  branch        RestaurantBranch? @relation(fields: [branchId], references: [id])
+
   refreshTokens RefreshToken[]
 }
 
@@ -35,17 +39,24 @@ model RefreshToken {
 }
 
 model RestaurantBranch {
-  id        String                 @id @default(uuid()) @db.Uuid
-  name      String
-  address   String
-  phone     String
-  latitude  Float                  @db.DoublePrecision
-  longitude Float                  @db.DoublePrecision
-  status    RestaurantBranchStatus @default(ACTIVE)
-  createdAt DateTime               @default(now())
-  updatedAt DateTime               @updatedAt
+  id                  String                 @id @default(uuid()) @db.Uuid
+  name                String
+  address             String
+  phone               String
+  latitude            Float                  @db.DoublePrecision
+  longitude           Float                  @db.DoublePrecision
+  imageUrl            String?
+  openingTime         String?                @default("08:00")
+  closingTime         String?                @default("22:00")
+  slotDurationMinutes Int                    @default(90)
+  status              RestaurantBranchStatus @default(ACTIVE)
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
 
-  tables RestaurantTable[]
+  tables              RestaurantTable[]
+  staff               User[]
+  branchMenuItems     BranchMenuItem[]
+  operatingHours      BranchOperatingHours[]
 
   @@map("restaurant_branches")
 }
@@ -56,7 +67,7 @@ model TableType {
   capacity    Int
   description String?
 
-  tables RestaurantTable[]
+  tables      RestaurantTable[]
 
   @@map("table_types")
 }
@@ -67,12 +78,13 @@ model RestaurantTable {
   floor       Int
   status      RestaurantTableStatus @default(AVAILABLE)
   note        String?
+  isActive    Boolean               @default(true)
 
-  branchId    String @db.Uuid
-  tableTypeId String @db.Uuid
+  branchId    String                @db.Uuid
+  tableTypeId String                @db.Uuid
 
-  branch    RestaurantBranch @relation(fields: [branchId], references: [id])
-  tableType TableType        @relation(fields: [tableTypeId], references: [id])
+  branch      RestaurantBranch      @relation(fields: [branchId], references: [id])
+  tableType   TableType             @relation(fields: [tableTypeId], references: [id])
 
   @@unique([branchId, tableNumber])
   @@map("restaurant_tables")
@@ -129,7 +141,6 @@ model MenuItem {
   price           Decimal      @db.Decimal(12, 2)
   originalPrice   Decimal?     @db.Decimal(12, 2)
   imageUrl        String?
-  isAvailable     Boolean      @default(true)
   isFeatured      Boolean      @default(false)
   preparationTime Int?
   isActive        Boolean      @default(true)
@@ -140,5 +151,40 @@ model MenuItem {
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
+  branchMenuItems BranchMenuItem[]
+
   @@map("menu_items")
+}
+
+model BranchMenuItem {
+  id            String   @id @default(uuid()) @db.Uuid
+  branchId      String   @db.Uuid
+  menuItemId    String   @db.Uuid
+  isAvailable   Boolean  @default(true) // Còn hàng / Tạm hết hôm nay tại chi nhánh
+  isActive      Boolean  @default(true) // Chi nhánh có kinh doanh món này không
+  priceOverride Decimal? @db.Decimal(12, 2) // Giá riêng nếu chi nhánh có chính sách giá khác
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  branch        RestaurantBranch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  menuItem      MenuItem         @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, menuItemId])
+  @@map("branch_menu_items")
+}
+
+model BranchOperatingHours {
+  id        String   @id @default(uuid()) @db.Uuid
+  branchId  String   @db.Uuid
+  dayOfWeek Int      // 0: Chủ Nhật, 1: Thứ Hai, ..., 6: Thứ Bảy
+  openTime  String   @default("08:00")
+  closeTime String   @default("22:00")
+  isOpen    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  branch    RestaurantBranch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, dayOfWeek])
+  @@map("branch_operating_hours")
 }

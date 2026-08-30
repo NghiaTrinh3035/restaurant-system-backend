@@ -18,7 +18,7 @@ export class MenuItemsService {
       throw new BadRequestException('Danh mục món ăn không tồn tại.');
     }
 
-    return this.prisma.menuItem.create({
+    const item = await this.prisma.menuItem.create({
       data: {
         name: dto.name,
         description: dto.description,
@@ -27,7 +27,6 @@ export class MenuItemsService {
           ? new Prisma.Decimal(dto.originalPrice) 
           : null,
         imageUrl: dto.imageUrl,
-        isAvailable: dto.isAvailable ?? true,
         isFeatured: dto.isFeatured ?? false,
         preparationTime: dto.preparationTime,
         isActive: dto.isActive ?? true,
@@ -37,6 +36,22 @@ export class MenuItemsService {
         category: true,
       },
     });
+
+    // Tự động gán món mới vào danh sách món của tất cả các chi nhánh hiện có
+    const branches = await this.prisma.restaurantBranch.findMany({ select: { id: true } });
+    if (branches.length > 0) {
+      await this.prisma.branchMenuItem.createMany({
+        data: branches.map(b => ({
+          branchId: b.id,
+          menuItemId: item.id,
+          isAvailable: true,
+          isActive: true,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    return item;
   }
 
   async findAll(query: QueryMenuItemsDto) {
@@ -48,10 +63,6 @@ export class MenuItemsService {
 
     if (query.categoryId) {
       where.categoryId = query.categoryId;
-    }
-
-    if (query.isAvailable !== undefined) {
-      where.isAvailable = query.isAvailable;
     }
 
     if (query.isFeatured !== undefined) {
@@ -126,7 +137,6 @@ export class MenuItemsService {
       data.originalPrice = dto.originalPrice !== null ? new Prisma.Decimal(dto.originalPrice) : null;
     }
     if (dto.imageUrl !== undefined) data.imageUrl = dto.imageUrl;
-    if (dto.isAvailable !== undefined) data.isAvailable = dto.isAvailable;
     if (dto.isFeatured !== undefined) data.isFeatured = dto.isFeatured;
     if (dto.preparationTime !== undefined) data.preparationTime = dto.preparationTime;
     if (dto.isActive !== undefined) data.isActive = dto.isActive;
