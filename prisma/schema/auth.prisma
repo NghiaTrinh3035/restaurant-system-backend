@@ -17,8 +17,6 @@ model User {
   branch        RestaurantBranch? @relation(fields: [branchId], references: [id])
 
   refreshTokens RefreshToken[]
-
-  @@map("users")
 }
 
 model RefreshToken {
@@ -28,9 +26,7 @@ model RefreshToken {
   revoked   Boolean  @default(false)
   createdAt DateTime @default(now())
   userId    String   @db.Uuid
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("refresh_tokens")
+  user      User     @relation(fields: [userId], references: [id])
 }
 
 enum Role {
