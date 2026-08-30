@@ -26,7 +26,7 @@ export class UpdateStaffDto {
 
   @ApiPropertyOptional({ description: 'ID chi nhánh làm việc (dùng khi điều chuyển)', example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' })
   @IsOptional()
-  @IsUUID('4', { message: 'ID chi nhánh không hợp lệ' })
+  @IsUUID('all', { message: 'ID chi nhánh không hợp lệ' })
   branchId?: string;
 
   @ApiPropertyOptional({ description: 'Trạng thái hoạt động', example: true })

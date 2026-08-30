@@ -24,7 +24,7 @@ export class QueryStaffDto {
 
   @ApiPropertyOptional({ description: 'Lọc theo ID chi nhánh' })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   branchId?: string;
 
   @ApiPropertyOptional({ description: 'Lọc theo trạng thái hoạt động' })

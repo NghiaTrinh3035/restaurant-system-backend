@@ -38,6 +38,6 @@ export class CreateStaffDto {
 
   @ApiProperty({ description: 'ID chi nhánh làm việc', example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' })
   @IsNotEmpty({ message: 'Chi nhánh làm việc không được để trống' })
-  @IsUUID('4', { message: 'ID chi nhánh không hợp lệ' })
+  @IsUUID('all', { message: 'ID chi nhánh không hợp lệ' })
   branchId: string;
 }
