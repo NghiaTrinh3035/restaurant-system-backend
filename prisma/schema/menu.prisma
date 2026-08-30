@@ -1,0 +1,54 @@
+model MenuCategory {
+  id          String     @id @default(uuid()) @db.Uuid
+  name        String     @unique
+  description String?
+  imageUrl    String?
+  isActive    Boolean    @default(true)
+  order       Int        @default(0)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  items       MenuItem[]
+
+  @@map("menu_categories")
+}
+
+model MenuItem {
+  id              String       @id @default(uuid()) @db.Uuid
+  name            String
+  description     String?
+  price           Decimal      @db.Decimal(12, 2)
+  originalPrice   Decimal?     @db.Decimal(12, 2)
+  imageUrl        String?
+  isAvailable     Boolean      @default(true)
+  isFeatured      Boolean      @default(false)
+  preparationTime Int?
+  isActive        Boolean      @default(true)
+
+  categoryId      String       @db.Uuid
+  category        MenuCategory @relation(fields: [categoryId], references: [id])
+
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  branchMenuItems BranchMenuItem[]
+
+  @@map("menu_items")
+}
+
+model BranchMenuItem {
+  id            String   @id @default(uuid()) @db.Uuid
+  branchId      String   @db.Uuid
+  menuItemId    String   @db.Uuid
+  isAvailable   Boolean  @default(true) // Còn hàng / Tạm hết hôm nay tại chi nhánh
+  isActive      Boolean  @default(true) // Chi nhánh có kinh doanh món này không
+  priceOverride Decimal? @db.Decimal(12, 2) // Giá riêng nếu chi nhánh có chính sách giá khác
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  branch        RestaurantBranch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  menuItem      MenuItem         @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, menuItemId])
+  @@map("branch_menu_items")
+}

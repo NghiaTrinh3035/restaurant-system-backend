@@ -4,13 +4,25 @@ import * as path from 'path';
 
 const prisma = new PrismaClient();
 
+function findPath(candidates: string[]): string | null {
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
 async function main() {
-  const dataAddressPath = path.join(__dirname, '../../../Data-Address');
-  
+  const provincesCandidates = [
+    path.join(__dirname, '../../provinces.json'),
+    path.join(process.cwd(), '../provinces.json'),
+    path.join(__dirname, '../../../Data-Address/provinces.json'),
+    path.join(process.cwd(), 'provinces.json'),
+  ];
+  const provincesPath = findPath(provincesCandidates);
+
   // 1. Seed Provinces
-  const provincesPath = path.join(dataAddressPath, 'provinces.json');
-  if (fs.existsSync(provincesPath)) {
-    console.log('Seeding Provinces...');
+  if (provincesPath) {
+    console.log(`Seeding Provinces from ${provincesPath}...`);
     const provincesData = JSON.parse(fs.readFileSync(provincesPath, 'utf8'));
     
     for (const p of provincesData) {
@@ -42,13 +54,20 @@ async function main() {
     }
     console.log(`Seeded ${provincesData.length} provinces.`);
   } else {
-    console.warn(`File not found: ${provincesPath}`);
+    console.warn(`File not found in any candidate locations for provinces.json`);
   }
 
   // 2. Seed Wards
-  const wardsDir = path.join(dataAddressPath, 'wards');
-  if (fs.existsSync(wardsDir)) {
-    console.log('Seeding Wards...');
+  const wardsCandidates = [
+    path.join(__dirname, '../../wards'),
+    path.join(process.cwd(), '../wards'),
+    path.join(__dirname, '../../../Data-Address/wards'),
+    path.join(process.cwd(), 'wards'),
+  ];
+  const wardsDir = findPath(wardsCandidates);
+
+  if (wardsDir) {
+    console.log(`Seeding Wards from ${wardsDir}...`);
     const files = fs.readdirSync(wardsDir);
     let totalWards = 0;
     
@@ -80,7 +99,7 @@ async function main() {
     }
     console.log(`Seeded ${totalWards} wards from ${files.length} files.`);
   } else {
-    console.warn(`Directory not found: ${wardsDir}`);
+    console.warn(`Directory not found in any candidate locations for wards`);
   }
 }
 

@@ -1,0 +1,35 @@
+model TableType {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  capacity    Int
+  description String?
+
+  tables      RestaurantTable[]
+
+  @@map("table_types")
+}
+
+model RestaurantTable {
+  id          String                @id @default(uuid()) @db.Uuid
+  tableNumber String
+  floor       Int
+  status      RestaurantTableStatus @default(AVAILABLE)
+  note        String?
+  isActive    Boolean               @default(true)
+
+  branchId    String                @db.Uuid
+  tableTypeId String                @db.Uuid
+
+  branch      RestaurantBranch      @relation(fields: [branchId], references: [id])
+  tableType   TableType             @relation(fields: [tableTypeId], references: [id])
+
+  @@unique([branchId, tableNumber])
+  @@map("restaurant_tables")
+}
+
+enum RestaurantTableStatus {
+  AVAILABLE
+  OCCUPIED
+  MAINTENANCE
+  DIRTY
+}
