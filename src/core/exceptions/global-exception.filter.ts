@@ -6,6 +6,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { Response } from 'express';
+import { ThrottlerException } from '@nestjs/throttler';
 import { ApiResponseDto } from '../dto/api-response.dto';
 
 @Catch()
@@ -18,11 +19,16 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     let message = 'Internal server error';
     let data = null;
 
-    if (exception instanceof HttpException) {
+    if (exception instanceof ThrottlerException) {
+      status = HttpStatus.TOO_MANY_REQUESTS;
+      message = 'Hệ thống nhận thấy quá nhiều yêu cầu từ bạn. Vui lòng thử lại sau giây lát!';
+    } else if (exception instanceof HttpException) {
       status = exception.getStatus();
       const exceptionResponse = exception.getResponse();
 
-      if (typeof exceptionResponse === 'string') {
+      if (status === HttpStatus.TOO_MANY_REQUESTS) {
+        message = 'Hệ thống nhận thấy quá nhiều yêu cầu từ bạn. Vui lòng thử lại sau giây lát!';
+      } else if (typeof exceptionResponse === 'string') {
         message = exceptionResponse;
       } else if (
         typeof exceptionResponse === 'object' &&

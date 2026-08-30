@@ -1,5 +1,6 @@
 import { Body, Controller, HttpCode, HttpStatus, Post, Get, Req, UseGuards, Res } from '@nestjs/common';
 import type { Request, Response, CookieOptions } from 'express';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from '../services/auth.service';
 import { AuthCookieService } from '../services/auth-cookie.service';
 import { RegisterDto } from '../dtos/register.dto';
@@ -20,6 +21,7 @@ export class AuthController {
   ) { }
 
   @Public()
+  @Throttle({ default: { limit: 3, ttl: 60000 } }) // Tối đa 3 lần yêu cầu OTP / 1 phút
   @ResponseMessage('OTP đã được gửi thành công')
   @Post('register/request-otp')
   @HttpCode(HttpStatus.OK)
@@ -28,6 +30,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle({ default: { limit: 5, ttl: 60000 } }) // Tối đa 5 lần đăng ký / 1 phút
   @ResponseMessage('Đăng ký thành công')
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
@@ -41,6 +44,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle({ default: { limit: 5, ttl: 60000 } }) // Tối đa 5 lần đăng nhập / 1 phút
   @ResponseMessage('Đăng nhập thành công')
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -68,6 +72,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle({ default: { limit: 3, ttl: 60000 } }) // Tối đa 3 lần yêu cầu quên mật khẩu / 1 phút
   @ResponseMessage('Yêu cầu đặt lại mật khẩu thành công')
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
@@ -76,6 +81,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle({ default: { limit: 5, ttl: 60000 } }) // Tối đa 5 lần đặt lại mật khẩu / 1 phút
   @ResponseMessage('Đặt lại mật khẩu thành công')
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)
@@ -84,6 +90,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle({ default: { limit: 3, ttl: 60000 } }) // Tối đa 3 lần gửi lại OTP / 1 phút
   @ResponseMessage('OTP mới đã được gửi thành công')
   @Post('resend-otp')
   @HttpCode(HttpStatus.OK)
