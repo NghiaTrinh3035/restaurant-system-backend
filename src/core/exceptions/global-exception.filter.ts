@@ -43,8 +43,10 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         }
       }
     } else if (exception instanceof Error) {
-      // Handle other types of errors (e.g., Prisma errors if you want to map them)
-      message = exception.message;
+      // Tránh làm lộ cấu trúc DB hoặc thông tin nhạy cảm ở production
+      const isDev = process.env.NODE_ENV === 'development';
+      message = isDev ? exception.message : 'Đã có lỗi hệ thống xảy ra. Vui lòng thử lại sau!';
+      console.error('Unhandled System Exception:', exception);
     }
 
     const apiResponse = new ApiResponseDto(false, message, data);

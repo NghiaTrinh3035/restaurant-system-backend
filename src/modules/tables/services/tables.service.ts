@@ -205,7 +205,9 @@ export class TablesService {
   }
 
   async getRestaurantTables(query?: QueryRestaurantTableDto) {
-    const where: Prisma.RestaurantTableWhereInput = {};
+    const where: Prisma.RestaurantTableWhereInput = {
+      isActive: query?.isActive !== undefined ? query.isActive : true,
+    };
 
     if (query?.branchId && query.branchId !== 'ALL') {
       where.branchId = query.branchId;
@@ -297,7 +299,7 @@ export class TablesService {
     }
 
     return this.prisma.restaurantTable.findMany({
-      where: { branchId },
+      where: { branchId, isActive: true },
       include: {
         tableType: true,
         branch: true,
@@ -356,9 +358,9 @@ export class TablesService {
   async deleteRestaurantTable(id: string) {
     await this.getRestaurantTableById(id); // validate exists
 
-    // Currently no dependency check needed as per requirements (e.g. Reservation/Order)
-    return this.prisma.restaurantTable.delete({
+    return this.prisma.restaurantTable.update({
       where: { id },
+      data: { isActive: false },
     });
   }
 }

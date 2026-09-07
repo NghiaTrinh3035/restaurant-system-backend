@@ -18,6 +18,8 @@ model User {
 
   refreshTokens RefreshToken[]
 
+  @@index([branchId, isActive])
+  @@index([role, isActive])
   @@map("users")
 }
 
@@ -28,8 +30,10 @@ model RefreshToken {
   revoked   Boolean  @default(false)
   createdAt DateTime @default(now())
   userId    String   @db.Uuid
-  user      User     @relation(fields: [userId], references: [id])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
+  @@index([tokenHash])
   @@map("refresh_tokens")
 }
 

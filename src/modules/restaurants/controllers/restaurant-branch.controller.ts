@@ -8,25 +8,24 @@ import {
     Param,
     Patch,
     Post,
+    Put,
+    Query,
     UseGuards,
 } from '@nestjs/common';
 
 import { RestaurantBranchService } from '../services/restaurant-branch.service';
-
 import { ResponseMessage } from 'src/core/common/decorators/response-message.decorator';
-
 import { Role } from '@prisma/client';
-
-
 import { JwtAuthGuard } from 'src/core/common/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/core/common/guards/roles.guard';
 import { CreateRestaurantBranchDto } from '../dto/create-restaurant-branch.dto';
 import { Public } from 'src/core/common/decorators/public.decorator';
 import { Roles } from 'src/core/common/decorators/roles.decorator';
 import { UpdateRestaurantBranchDto } from '../dto/update-restaurant-branch.dto';
-
 import { QueryRestaurantBranchDto } from '../dto/query-restaurant-branch.dto';
-import { Query } from '@nestjs/common';
+import { UpdateBranchOperatingHoursDto } from '../dto/branch-operating-hours.dto';
+import { CurrentUser } from 'src/core/common/decorators/current-user.decorator';
+import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
 
 @Controller('/restaurants/branches')
 export class RestaurantBranchController {
@@ -106,5 +105,49 @@ export class RestaurantBranchController {
         @Param('id') id: string,
     ) {
         return this.restaurantBranchService.deleteRestaurantBranch(id);
+    }
+
+    /**
+     * Lấy khung giờ hoạt động chung và chi tiết 7 ngày trong tuần
+     */
+    @Get('/:id/operating-hours')
+    @Public()
+    @HttpCode(HttpStatus.OK)
+    @ResponseMessage('Lấy khung giờ hoạt động chi nhánh thành công.')
+    async getOperatingHours(
+        @Param('id') id: string,
+    ) {
+        return this.restaurantBranchService.getOperatingHours(id);
+    }
+
+    /**
+     * Cập nhật khung giờ mở/đóng cửa và thời lượng slot dùng bữa
+     */
+    @Put('/:id/operating-hours')
+    @HttpCode(HttpStatus.OK)
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(Role.ADMIN, Role.STAFF)
+    @ResponseMessage('Cập nhật khung giờ hoạt động chi nhánh thành công.')
+    async updateOperatingHours(
+        @Param('id') id: string,
+        @Body() dto: UpdateBranchOperatingHoursDto,
+        @CurrentUser() user: ICurrentUser,
+    ) {
+        return this.restaurantBranchService.updateOperatingHours(id, dto, user);
+    }
+
+    /**
+     * Lấy thống kê năng lực sức chứa (bàn, ghế, phân loại bàn) của chi nhánh
+     */
+    @Get('/:id/capacity')
+    @HttpCode(HttpStatus.OK)
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(Role.ADMIN, Role.STAFF)
+    @ResponseMessage('Lấy thống kê sức chứa chi nhánh thành công.')
+    async getBranchCapacity(
+        @Param('id') id: string,
+        @CurrentUser() user: ICurrentUser,
+    ) {
+        return this.restaurantBranchService.getBranchCapacity(id, user);
     }
 }
