@@ -10,7 +10,7 @@ export class CreateRestaurantTableDto {
 
     @IsOptional()
     @IsEnum(RestaurantTableStatus)
-    status?: RestaurantTableStatus;
+    status: RestaurantTableStatus = RestaurantTableStatus.AVAILABLE;
 
     @IsOptional()
     @IsString()

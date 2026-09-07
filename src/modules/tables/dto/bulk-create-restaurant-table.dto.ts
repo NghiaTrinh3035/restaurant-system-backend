@@ -18,7 +18,7 @@ export class BulkCreateRestaurantTableDto {
 
   @IsOptional()
   @IsEnum(RestaurantTableStatus)
-  status?: RestaurantTableStatus;
+  status: RestaurantTableStatus = RestaurantTableStatus.AVAILABLE;
 
   @IsOptional()
   @IsString()

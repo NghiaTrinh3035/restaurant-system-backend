@@ -1,4 +1,4 @@
-import { IsEnum, IsNotEmpty, IsOptional, IsString } from "class-validator";
+import { IsEnum, IsOptional, IsString } from "class-validator";
 import { EGender } from "../enums/gender.enum";
 export class UpdateUserProfileRequest {
     @IsString()

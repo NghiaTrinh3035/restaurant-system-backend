@@ -27,9 +27,9 @@ export class MenuItemsService {
           ? new Prisma.Decimal(dto.originalPrice) 
           : null,
         imageUrl: dto.imageUrl,
-        isFeatured: dto.isFeatured ?? false,
+        isFeatured: dto.isFeatured,
         preparationTime: dto.preparationTime,
-        isActive: dto.isActive ?? true,
+        isActive: dto.isActive,
         categoryId: dto.categoryId,
       },
       include: {
@@ -76,8 +76,8 @@ export class MenuItemsService {
       ];
     }
 
-    const page = Number(query.page) || 1;
-    const limit = Number(query.limit) || 10;
+    const page = query.page;
+    const limit = query.limit;
     const skip = (page - 1) * limit;
 
     const [items, totalItems] = await Promise.all([

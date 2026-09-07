@@ -66,8 +66,8 @@ export class RestaurantBranchService {
             });
         }
 
-        const page = Number(query.page) || 1;
-        const limit = Number(query.limit) || 10;
+        const page = query ? query.page : 1;
+        const limit = query ? query.limit : 10;
         const skip = (page - 1) * limit;
 
         const [items, totalItems] = await Promise.all([
@@ -204,18 +204,15 @@ export class RestaurantBranchService {
         // Tự động khởi tạo đầy đủ 7 ngày nếu chi nhánh chưa có đủ
         let hours = branch.operatingHours;
         if (!hours || hours.length < 7) {
-            const existingDays = new Set(hours?.map((h) => h.dayOfWeek) || []);
-            const defaultOpen = branch.openingTime || '08:00';
-            const defaultClose = branch.closingTime || '22:00';
-
+            const existingDays = new Set(hours ? hours.map((h) => h.dayOfWeek) : []);
             const toCreate: any[] = [];
             for (let day = 0; day <= 6; day++) {
                 if (!existingDays.has(day)) {
                     toCreate.push({
                         branchId,
                         dayOfWeek: day,
-                        openTime: defaultOpen,
-                        closeTime: defaultClose,
+                        ...(branch.openingTime ? { openTime: branch.openingTime } : {}),
+                        ...(branch.closingTime ? { closeTime: branch.closingTime } : {}),
                         isOpen: true,
                     });
                 }
@@ -237,9 +234,9 @@ export class RestaurantBranchService {
         return {
             branchId: branch.id,
             branchName: branch.name,
-            openingTime: branch.openingTime || '08:00',
-            closingTime: branch.closingTime || '22:00',
-            slotDurationMinutes: branch.slotDurationMinutes || 90,
+            openingTime: branch.openingTime,
+            closingTime: branch.closingTime,
+            slotDurationMinutes: branch.slotDurationMinutes,
             dailyHours: hours,
         };
     }
@@ -324,19 +321,22 @@ export class RestaurantBranchService {
 
         for (const t of tables) {
             if (!t.tableType) continue;
-            const cap = t.tableType.capacity || 0;
+            const cap = t.tableType.capacity;
             totalSeats += cap;
 
-            const existing = typeMap.get(t.tableTypeId) || {
-                id: t.tableTypeId,
-                name: t.tableType.name,
-                capacity: cap,
-                tableCount: 0,
-                totalSeats: 0,
-            };
+            let existing = typeMap.get(t.tableTypeId);
+            if (!existing) {
+                existing = {
+                    id: t.tableTypeId,
+                    name: t.tableType.name,
+                    capacity: cap,
+                    tableCount: 0,
+                    totalSeats: 0,
+                };
+                typeMap.set(t.tableTypeId, existing);
+            }
             existing.tableCount += 1;
             existing.totalSeats += cap;
-            typeMap.set(t.tableTypeId, existing);
         }
 
         const byTableType = Array.from(typeMap.values()).sort((a, b) => a.capacity - b.capacity);
@@ -344,9 +344,9 @@ export class RestaurantBranchService {
         return {
             branchId: branch.id,
             branchName: branch.name,
-            openingTime: branch.openingTime || '08:00',
-            closingTime: branch.closingTime || '22:00',
-            slotDurationMinutes: branch.slotDurationMinutes || 90,
+            openingTime: branch.openingTime,
+            closingTime: branch.closingTime,
+            slotDurationMinutes: branch.slotDurationMinutes,
             totalTables,
             totalSeats,
             byTableType,

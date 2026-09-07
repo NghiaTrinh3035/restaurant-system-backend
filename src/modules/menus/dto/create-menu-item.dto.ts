@@ -34,7 +34,7 @@ export class CreateMenuItemDto {
   @ApiPropertyOptional({ description: 'Món nổi bật / bán chạy', default: false })
   @IsBoolean()
   @IsOptional()
-  isFeatured?: boolean;
+  isFeatured: boolean = false;
 
   @ApiPropertyOptional({ description: 'Thời gian chế biến ước tính (phút)', example: 15 })
   @Type(() => Number)
@@ -51,5 +51,5 @@ export class CreateMenuItemDto {
   @ApiPropertyOptional({ description: 'Trạng thái hiển thị trong hệ thống', default: true })
   @IsBoolean()
   @IsOptional()
-  isActive?: boolean;
+  isActive: boolean = true;
 }

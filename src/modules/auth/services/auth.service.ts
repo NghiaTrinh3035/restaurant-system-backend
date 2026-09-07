@@ -1,4 +1,5 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import ms from 'ms';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -32,6 +33,7 @@ export class AuthService {
     private readonly jwtService: AuthJwtService,
     private readonly otpService: OtpService,
     private readonly mailService: MailService,
+    private readonly configService: ConfigService,
   ) { }
 
   /**
@@ -238,7 +240,10 @@ export class AuthService {
       throw new InvalidCredentialsException();
     }
     const { id: providerId, email, firstName, lastName, picture } = req.user;
-    const normalizedEmail = (email || '').trim().toLowerCase();
+    if (!email) {
+      throw new UnauthorizedException('Không tìm thấy thông tin email từ tài khoản Google');
+    }
+    const normalizedEmail = email.trim().toLowerCase();
 
     let user = await this.prisma.user.findUnique({
       where: { email: normalizedEmail },
@@ -249,11 +254,14 @@ export class AuthService {
     }
 
     if (!user) {
+      const nameCandidate = [firstName, lastName].filter(Boolean).join(' ').trim();
+      const resolvedFullName = nameCandidate.length > 0 ? nameCandidate : normalizedEmail.split('@')[0];
+
       user = await this.prisma.user.create({
         data: {
           email: normalizedEmail,
-          fullName: `${firstName || ''} ${lastName || ''}`.trim() || 'Google User',
-          avatar: picture || null,
+          fullName: resolvedFullName,
+          avatar: picture ? picture : null,
           provider: AuthProvider.GOOGLE,
           providerId: providerId ? String(providerId) : null,
           role: Role.USER,
@@ -293,7 +301,7 @@ export class AuthService {
   }
 
   private async saveRefreshToken(userId: string, token: string): Promise<void> {
-    const refreshTime = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
+    const refreshTime = this.configService.getOrThrow<string>('JWT_REFRESH_EXPIRES_IN');
     const expiresAt = new Date(Date.now() + ms(refreshTime as any));
 
     await this.prisma.refreshToken.create({
