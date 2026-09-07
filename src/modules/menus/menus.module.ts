@@ -3,10 +3,12 @@ import { MenuCategoriesController } from './controllers/menu-categories.controll
 import { MenuCategoriesService } from './services/menu-categories.service';
 import { MenuItemsController } from './controllers/menu-items.controller';
 import { MenuItemsService } from './services/menu-items.service';
+import { BranchMenuController } from './controllers/branch-menu.controller';
+import { BranchMenuService } from './services/branch-menu.service';
 
 @Module({
-  controllers: [MenuCategoriesController, MenuItemsController],
-  providers: [MenuCategoriesService, MenuItemsService],
-  exports: [MenuCategoriesService, MenuItemsService],
+  controllers: [MenuCategoriesController, MenuItemsController, BranchMenuController],
+  providers: [MenuCategoriesService, MenuItemsService, BranchMenuService],
+  exports: [MenuCategoriesService, MenuItemsService, BranchMenuService],
 })
 export class MenusModule {}

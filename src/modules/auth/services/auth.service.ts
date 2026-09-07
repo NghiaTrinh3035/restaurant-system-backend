@@ -134,6 +134,16 @@ export class AuthService {
   async login(data: LoginDto): Promise<IAuthResult> {
     const user = await this.prisma.user.findUnique({
       where: { email: data.email },
+      include: {
+        branch: {
+          select: {
+            id: true,
+            name: true,
+            address: true,
+            status: true,
+          },
+        },
+      },
     });
     if (!user || !user.passwordHash) {
       throw new InvalidCredentialsException();
