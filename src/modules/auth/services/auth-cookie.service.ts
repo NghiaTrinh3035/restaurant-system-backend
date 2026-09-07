@@ -1,11 +1,14 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Response, CookieOptions } from 'express';
 import ms, { StringValue } from 'ms';
 
 @Injectable()
 export class AuthCookieService {
+  constructor(private readonly configService: ConfigService) {}
+
   private get cookieOptions(): CookieOptions {
-    const isProduction = process.env.NODE_ENV !== 'development';
+    const isProduction = this.configService.get<string>('NODE_ENV') === 'production';
     return {
       httpOnly: true,
       secure: isProduction,
@@ -14,8 +17,8 @@ export class AuthCookieService {
   }
 
   setAuthCookies(res: Response, accessToken: string, refreshToken: string): void {
-    const accessTime = process.env.JWT_ACCESS_EXPIRES_IN || '1d';
-    const refreshTime = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
+    const accessTime = this.configService.getOrThrow<string>('JWT_ACCESS_EXPIRES_IN');
+    const refreshTime = this.configService.getOrThrow<string>('JWT_REFRESH_EXPIRES_IN');
     const baseOptions = this.cookieOptions;
 
     res.cookie('accessToken', accessToken, {

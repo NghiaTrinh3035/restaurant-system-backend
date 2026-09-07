@@ -7,10 +7,10 @@ export class PaginationMetaDto {
   hasPrevPage: boolean;
 
   constructor(page: number, limit: number, totalItems: number) {
-    this.page = Number(page) || 1;
-    this.limit = Number(limit) || 10;
-    this.totalItems = Number(totalItems) || 0;
-    this.totalPages = Math.max(1, Math.ceil(this.totalItems / this.limit));
+    this.page = page;
+    this.limit = limit;
+    this.totalItems = totalItems;
+    this.totalPages = Math.max(1, Math.ceil(this.totalItems / Math.max(1, this.limit)));
     this.hasNextPage = this.page < this.totalPages;
     this.hasPrevPage = this.page > 1;
   }

@@ -7,9 +7,8 @@ import { UpdateTableTypeDto } from '../dto/update-table-type.dto';
 import { BulkCreateRestaurantTableDto } from '../dto/bulk-create-restaurant-table.dto';
 import { QueryTableTypeDto } from '../dto/query-table-type.dto';
 import { QueryRestaurantTableDto } from '../dto/query-restaurant-table.dto';
-import { RestaurantTableStatus, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
-import { PaginationQueryDto } from 'src/core/dto/pagination-query.dto';
 import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
 
 @Injectable()
@@ -46,8 +45,8 @@ export class TablesService {
       });
     }
 
-    const page = Number(query.page) || 1;
-    const limit = Number(query.limit) || 10;
+    const page = query ? query.page : 1;
+    const limit = query ? query.limit : 10;
     const skip = (page - 1) * limit;
 
     const [items, totalItems] = await Promise.all([
@@ -134,7 +133,7 @@ export class TablesService {
     return this.prisma.restaurantTable.create({
       data: {
         ...dto,
-        status: dto.status ?? RestaurantTableStatus.AVAILABLE,
+        status: dto.status,
       },
     });
   }
@@ -184,7 +183,7 @@ export class TablesService {
     const tablesData = newTableNumbers.map(tableNumber => ({
       tableNumber,
       floor: dto.floor,
-      status: dto.status ?? RestaurantTableStatus.AVAILABLE,
+      status: dto.status,
       note: dto.note,
       branchId: dto.branchId,
       tableTypeId: dto.tableTypeId,
@@ -248,8 +247,8 @@ export class TablesService {
       });
     }
 
-    const page = Number(query.page) || 1;
-    const limit = Number(query.limit) || 10;
+    const page = query ? query.page : 1;
+    const limit = query ? query.limit : 10;
     const skip = (page - 1) * limit;
 
     const [items, totalItems] = await Promise.all([
@@ -333,8 +332,8 @@ export class TablesService {
     }
 
     // Check duplicate if changing branchId or tableNumber
-    const targetBranchId = dto.branchId ?? table.branchId;
-    const targetTableNumber = dto.tableNumber ?? table.tableNumber;
+    const targetBranchId = dto.branchId !== undefined ? dto.branchId : table.branchId;
+    const targetTableNumber = dto.tableNumber !== undefined ? dto.tableNumber : table.tableNumber;
     
     if (targetBranchId !== table.branchId || targetTableNumber !== table.tableNumber) {
       const existingTable = await this.prisma.restaurantTable.findFirst({

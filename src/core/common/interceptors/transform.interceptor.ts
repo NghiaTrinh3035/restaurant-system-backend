@@ -24,9 +24,8 @@ export class TransformInterceptor<T>
     context: ExecutionContext,
     next: CallHandler,
   ): Observable<ApiResponseDto<T>> {
-    const responseMessage =
-      this.reflector.get<string>(RESPONSE_MESSAGE, context.getHandler()) ||
-      'Request successful';
+    const customMessage = this.reflector.get<string>(RESPONSE_MESSAGE, context.getHandler());
+    const responseMessage = customMessage !== undefined ? customMessage : 'Request successful';
 
     return next.handle().pipe(
       map((data) => {

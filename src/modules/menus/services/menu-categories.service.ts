@@ -38,8 +38,8 @@ export class MenuCategoriesService {
       };
     }
 
-    const page = Number(query?.page) || 1;
-    const limit = Number(query?.limit) || 10;
+    const page = query ? query.page : 1;
+    const limit = query ? query.limit : 10;
     const skip = (page - 1) * limit;
 
     const [items, totalItems] = await Promise.all([

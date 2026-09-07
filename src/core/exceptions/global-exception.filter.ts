@@ -34,12 +34,12 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         typeof exceptionResponse === 'object' &&
         exceptionResponse !== null
       ) {
-        message = (exceptionResponse as any).message || message;
-        data = (exceptionResponse as any).error || null;
-        
-        // Handle class-validator validation errors array
-        if (Array.isArray(message)) {
-          message = message[0]; // Or join them if preferred
+        const resObj = exceptionResponse as Record<string, any>;
+        if (resObj.message !== undefined && resObj.message !== null) {
+          message = Array.isArray(resObj.message) ? resObj.message[0] : resObj.message;
+        }
+        if (resObj.error !== undefined) {
+          data = resObj.error;
         }
       }
     } else if (exception instanceof Error) {

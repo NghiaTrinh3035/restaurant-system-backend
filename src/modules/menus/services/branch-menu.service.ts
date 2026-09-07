@@ -80,8 +80,8 @@ export class BranchMenuService {
       where.isActive = query.isActive;
     }
 
-    const page = Number(query.page) || 1;
-    const limit = Number(query.limit) || 10;
+    const page = query.page;
+    const limit = query.limit;
     const skip = (page - 1) * limit;
 
     const [items, totalItems, inStockCount, outOfStockCount, inactiveCount] = await Promise.all([

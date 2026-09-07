@@ -1,5 +1,5 @@
 import { Body, Controller, HttpCode, HttpStatus, Post, Get, Req, UseGuards, Res } from '@nestjs/common';
-import type { Request, Response, CookieOptions } from 'express';
+import type { Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from '../services/auth.service';
 import { AuthCookieService } from '../services/auth-cookie.service';
@@ -12,12 +12,14 @@ import { ResetPasswordDto } from '../dtos/reset-password.dto';
 import { Public } from 'src/core/common/decorators/public.decorator';
 import { ResponseMessage } from 'src/core/common/decorators/response-message.decorator';
 import { GoogleAuthGuard } from 'src/core/common/guards/google-auth.guard';
+import { ConfigService } from '@nestjs/config';
 
 @Controller('auth')
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly authCookieService: AuthCookieService,
+    private readonly configService: ConfigService,
   ) { }
 
   @Public()
@@ -128,7 +130,7 @@ export class AuthController {
     const result = await this.authService.googleLogin(req);
     this.authCookieService.setAuthCookies(res, result.accessToken, result.refreshToken);
 
-    const frontendUrl = process.env.APP_PUBLIC_URL || 'http://localhost:5173';
+    const frontendUrl = this.configService.getOrThrow<string>('APP_PUBLIC_URL');
     return res.redirect(frontendUrl);
   }
 }
