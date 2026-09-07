@@ -14,10 +14,11 @@ async function bootstrap() {
   // Enable cookie parser
   app.use(cookieParser());
 
-  // Parse CORS origins from .env
-  const corsOrigins = process.env.CORS_ALLOWED_ORIGINS
-    ? process.env.CORS_ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
-    : '*'; // Fallback to allow all if not set
+  // Parse CORS origins from .env (credentials: true requires explicit origin list, never wildcard '*')
+  const rawCors = process.env.CORS_ALLOWED_ORIGINS;
+  const corsOrigins = rawCors
+    ? rawCors.split(',').map(origin => origin.trim()).filter(Boolean)
+    : ['http://localhost:5173', 'http://127.0.0.1:5173'];
 
   // Enable CORS
   app.enableCors({

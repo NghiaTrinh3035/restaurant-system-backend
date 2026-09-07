@@ -39,15 +39,16 @@ export class AuthService {
    * Không tạo User. Không nhận password.
    */
   async requestOtp(dto: RequestRegisterOtpDto): Promise<ApiResponseDto<null>> {
+    const email = dto.email.trim().toLowerCase();
     const existingUser = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+      where: { email },
     });
     if (existingUser) {
       throw new EmailAlreadyExistsException();
     }
 
-    const otp = await this.otpService.generateAndSaveOtp(dto.email, OtpType.REGISTER);
-    await this.mailService.sendOtpEmail(dto.email, otp);
+    const otp = await this.otpService.generateAndSaveOtp(email, OtpType.REGISTER);
+    await this.mailService.sendOtpEmail(email, otp);
 
     return new ApiResponseDto(true, 'Mã OTP đã được gửi đến email của bạn', null);
   }
@@ -56,15 +57,16 @@ export class AuthService {
    * Bước 1.5: Gửi lại OTP mới, ghi đè OTP cũ, reset TTL.
    */
   async resendOtp(dto: ResendOtpDto): Promise<ApiResponseDto<null>> {
+    const email = dto.email.trim().toLowerCase();
     const existingUser = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+      where: { email },
     });
 
     // Nếu user đã tồn tại -> Đây là luồng Forgot Password. Nếu chưa -> Luồng Register.
     const type = existingUser ? OtpType.FORGOT_PASSWORD : OtpType.REGISTER;
 
-    const newOtp = await this.otpService.resendOtp(dto.email, type);
-    await this.mailService.sendOtpEmail(dto.email, newOtp);
+    const newOtp = await this.otpService.resendOtp(email, type);
+    await this.mailService.sendOtpEmail(email, newOtp);
 
     return new ApiResponseDto(true, 'Mã OTP mới đã được gửi đến email của bạn', null);
   }
@@ -75,19 +77,21 @@ export class AuthService {
    * Password chỉ nhận đúng một lần ở bước này.
    */
   async register(dto: RegisterDto): Promise<IAuthResult> {
+    const email = dto.email.trim().toLowerCase();
+
     // 1. Validate confirm password
     if (dto.password !== dto.confirmPassword) {
       throw new PasswordMismatchException();
     }
 
     // 2. Kiểm tra key OTP có tồn tại không (phân biệt hết hạn vs sai mã)
-    const otpKeyExists = await this.otpService.hasOtp(dto.email, OtpType.REGISTER);
+    const otpKeyExists = await this.otpService.hasOtp(email, OtpType.REGISTER);
     if (!otpKeyExists) {
       throw new OtpExpiredException();
     }
 
     // 3. Verify OTP
-    const isOtpValid = await this.otpService.verifyOtp(dto.email, dto.otp, OtpType.REGISTER);
+    const isOtpValid = await this.otpService.verifyOtp(email, dto.otp, OtpType.REGISTER);
     if (!isOtpValid) {
       throw new InvalidOtpException();
     }
@@ -98,7 +102,7 @@ export class AuthService {
     // 5. Tạo User
     const newUser = await this.prisma.user.create({
       data: {
-        email: dto.email,
+        email,
         fullName: dto.fullName,
         phone: dto.phone,
         passwordHash: hashedPassword,
@@ -132,8 +136,9 @@ export class AuthService {
    * Login với email + password.
    */
   async login(data: LoginDto): Promise<IAuthResult> {
+    const email = data.email.trim().toLowerCase();
     const user = await this.prisma.user.findUnique({
-      where: { email: data.email },
+      where: { email },
       include: {
         branch: {
           select: {
@@ -147,6 +152,10 @@ export class AuthService {
     });
     if (!user || !user.passwordHash) {
       throw new InvalidCredentialsException();
+    }
+
+    if (!user.isActive) {
+      throw new UnauthorizedException('Tài khoản của bạn đã bị khóa hoặc ngừng hoạt động. Vui lòng liên hệ quản trị viên.');
     }
 
     const isPasswordValid = await this.passwordService.verifyPassword(
@@ -181,15 +190,16 @@ export class AuthService {
    * Quên mật khẩu: Yêu cầu gửi mã OTP
    */
   async forgotPassword(dto: ForgotPasswordDto): Promise<ApiResponseDto<null>> {
-    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    const email = dto.email.trim().toLowerCase();
+    const user = await this.prisma.user.findUnique({ where: { email } });
     if (!user) {
       // Trả về success kể cả khi không có email để bảo mật thông tin
       return new ApiResponseDto(true, 'Nếu email tồn tại, mã OTP đã được gửi.', null);
     }
 
-    const otp = await this.otpService.generateAndSaveOtp(dto.email, OtpType.FORGOT_PASSWORD);
+    const otp = await this.otpService.generateAndSaveOtp(email, OtpType.FORGOT_PASSWORD);
 
-    await this.mailService.sendOtpEmail(dto.email, otp);
+    await this.mailService.sendOtpEmail(email, otp);
 
     return new ApiResponseDto(true, 'Mã xác nhận đặt lại mật khẩu đã được gửi đến email của bạn.', null);
   }
@@ -198,7 +208,8 @@ export class AuthService {
    * Quên mật khẩu: Đặt lại mật khẩu mới
    */
   async resetPassword(dto: ResetPasswordDto): Promise<ApiResponseDto<null>> {
-    const isOtpValid = await this.otpService.verifyOtp(dto.email, dto.otp, OtpType.FORGOT_PASSWORD);
+    const email = dto.email.trim().toLowerCase();
+    const isOtpValid = await this.otpService.verifyOtp(email, dto.otp, OtpType.FORGOT_PASSWORD);
     if (!isOtpValid) {
       throw new InvalidOtpException();
     }
@@ -206,12 +217,12 @@ export class AuthService {
     const hashedPassword = await this.passwordService.hashPassword(dto.newPassword);
 
     await this.prisma.user.update({
-      where: { email: dto.email },
+      where: { email },
       data: { passwordHash: hashedPassword },
     });
 
     // Thu hồi tất cả các token cũ
-    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    const user = await this.prisma.user.findUnique({ where: { email } });
     if (user) {
       await this.revokeAllUserTokens(user.id.toString());
     }
@@ -226,22 +237,34 @@ export class AuthService {
     if (!req.user) {
       throw new InvalidCredentialsException();
     }
-    const { email, firstName, lastName, picture } = req.user;
+    const { id: providerId, email, firstName, lastName, picture } = req.user;
+    const normalizedEmail = (email || '').trim().toLowerCase();
 
     let user = await this.prisma.user.findUnique({
-      where: { email },
+      where: { email: normalizedEmail },
     });
+
+    if (user && !user.isActive) {
+      throw new UnauthorizedException('Tài khoản của bạn đã bị khóa hoặc ngừng hoạt động. Vui lòng liên hệ quản trị viên.');
+    }
 
     if (!user) {
       user = await this.prisma.user.create({
         data: {
-          email,
-          fullName: `${firstName} ${lastName}`.trim(),
-          avatar: picture,
+          email: normalizedEmail,
+          fullName: `${firstName || ''} ${lastName || ''}`.trim() || 'Google User',
+          avatar: picture || null,
           provider: AuthProvider.GOOGLE,
+          providerId: providerId ? String(providerId) : null,
           role: Role.USER,
           isActive: true,
         },
+      });
+    } else if (!user.providerId && providerId) {
+      // Liên kết providerId nếu tài khoản local trước đó chưa gắn Google ID
+      user = await this.prisma.user.update({
+        where: { id: user.id },
+        data: { providerId: String(providerId) },
       });
     }
 

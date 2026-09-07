@@ -33,6 +33,7 @@ model MenuItem {
 
   branchMenuItems BranchMenuItem[]
 
+  @@index([categoryId, isActive])
   @@map("menu_items")
 }
 
@@ -50,5 +51,7 @@ model BranchMenuItem {
   menuItem      MenuItem         @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
 
   @@unique([branchId, menuItemId])
+  @@index([branchId, isActive])
+  @@index([menuItemId])
   @@map("branch_menu_items")
 }

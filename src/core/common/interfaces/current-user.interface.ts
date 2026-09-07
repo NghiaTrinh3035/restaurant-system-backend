@@ -4,4 +4,6 @@ export interface ICurrentUser {
     id: string;
     email: string;
     role: Role;
+    branchId?: string | null;
+    isActive?: boolean;
 }

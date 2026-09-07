@@ -24,6 +24,7 @@ model RestaurantTable {
   tableType   TableType             @relation(fields: [tableTypeId], references: [id])
 
   @@unique([branchId, tableNumber])
+  @@index([branchId, isActive])
   @@map("restaurant_tables")
 }
 

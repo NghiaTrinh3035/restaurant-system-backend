@@ -38,11 +38,17 @@ export class UsersService {
 
   async updateProfile(userId: string, data: UpdateUserProfileRequest) {
     try {
+      const updateData: Prisma.UserUpdateInput = {};
+      if (data.fullName !== undefined) updateData.fullName = data.fullName;
+      if (data.phone !== undefined) updateData.phone = data.phone;
+      if (data.avatar !== undefined) updateData.avatar = data.avatar;
+      if (data.gender !== undefined) updateData.gender = data.gender as any;
+
       return await this.prisma.user.update({
         where: {
           id: userId
         },
-        data,
+        data: updateData,
         include: {
           branch: {
             select: {

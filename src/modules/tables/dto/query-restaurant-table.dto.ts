@@ -34,4 +34,9 @@ export class QueryRestaurantTableDto extends PaginationQueryDto {
   @Min(1)
   @IsOptional()
   floor?: number;
+
+  @ApiPropertyOptional({ description: 'Lọc theo trạng thái hoạt động' })
+  @IsOptional()
+  @Type(() => Boolean)
+  isActive?: boolean;
 }

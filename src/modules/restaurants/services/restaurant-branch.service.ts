@@ -9,7 +9,7 @@ import { UpdateRestaurantBranchDto } from '../dto/update-restaurant-branch.dto';
 import { QueryRestaurantBranchDto } from '../dto/query-restaurant-branch.dto';
 import { UpdateBranchOperatingHoursDto } from '../dto/branch-operating-hours.dto';
 import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
-import { RestaurantBranch, Prisma, Role } from '@prisma/client';
+import { RestaurantBranch, RestaurantBranchStatus, Prisma, Role } from '@prisma/client';
 import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
 
 @Injectable()
@@ -131,8 +131,11 @@ export class RestaurantBranchService {
     ): Promise<RestaurantBranch> {
         await this.getRestaurantBranch(id);
 
-        return this.prismaService.restaurantBranch.delete({
+        return this.prismaService.restaurantBranch.update({
             where: { id },
+            data: {
+                status: RestaurantBranchStatus.INACTIVE,
+            },
         });
     }
 
