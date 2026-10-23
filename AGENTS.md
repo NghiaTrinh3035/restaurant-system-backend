@@ -1,5 +1,11 @@
 # BACKEND AGENT RULES (FoodHub / RRMS Backend)
 
+Tài liệu kiến trúc chi tiết (Source of Truth): `backend_architecture/`
+- [README.md](backend_architecture/README.md)
+- [api_rules.md](backend_architecture/api_rules.md)
+- [security_and_performance.md](backend_architecture/security_and_performance.md)
+- [workflow.md](backend_architecture/workflow.md)
+
 > **BẮT BUỘC TUÂN THỦ ĐỐI VỚI MỌI THAO TÁC CỦA AGENT TRÊN BACKEND**:
 > 
 > 1. **Không fallback biến môi trường (.env)**:

@@ -1,6 +1,11 @@
 # Backend Architecture Rules (NestJS)
 
-Mọi thay đổi mã nguồn Back-end phải tuân thủ nghiêm ngặt các quy định kiến trúc sau:
+Mọi thay đổi mã nguồn Back-end phải tuân thủ nghiêm ngặt các quy định kiến trúc sau.
+Tài liệu kiến trúc chi tiết (Source of Truth): `backend_architecture/`
+- [README.md](../../backend_architecture/README.md)
+- [api_rules.md](../../backend_architecture/api_rules.md)
+- [security_and_performance.md](../../backend_architecture/security_and_performance.md)
+- [workflow.md](../../backend_architecture/workflow.md)
 
 ## 1. Cấu Trúc Module & Phân Tầng
 - Mỗi phân hệ nghiệp vụ phải tổ chức trong một module riêng biệt tại `src/modules/<tên-module>/`:

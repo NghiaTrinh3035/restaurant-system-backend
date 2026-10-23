@@ -11,7 +11,7 @@ Không được nhảy thẳng vào viết code hoặc thực hiện thay đổi
 2. **Inspect Repository (Kiểm tra kho lưu trữ)**
    - Kiểm tra trạng thái git hiện tại (`git status`, branch hiện tại).
 3. **Inspect Architecture (Kiểm tra kiến trúc)**
-   - Đọc các tài liệu kiến trúc Backend trong `be-architecture-rules.md` và `AGENTS.md`.
+   - Đọc các tài liệu kiến trúc Backend trong `be-architecture-rules.md`, `AGENTS.md` và chi tiết tại `backend_architecture/`.
 4. **Inspect Existing Implementation (Kiểm tra mã nguồn hiện tại)**
    - Tìm các module/service liên quan trong `src/modules/`.
    - Đánh giá khả năng tái sử dụng (không tạo code mới nếu có thể dùng lại).
