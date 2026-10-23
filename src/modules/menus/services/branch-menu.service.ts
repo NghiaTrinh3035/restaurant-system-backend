@@ -15,11 +15,6 @@ import { Prisma, Role } from '@prisma/client';
 export class BranchMenuService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /**
-   * Kiểm tra quyền truy cập chi nhánh:
-   * - ADMIN: Toàn quyền truy cập mọi chi nhánh
-   * - STAFF: Chỉ được thao tác trên chi nhánh mà nhân viên này phụ trách
-   */
   private async validateBranchAccess(branchId: string, user: ICurrentUser) {
     const branch = await this.prisma.restaurantBranch.findUnique({
       where: { id: branchId },
@@ -30,12 +25,17 @@ export class BranchMenuService {
     }
 
     if (user.role === Role.STAFF) {
-      const staffUser = await this.prisma.user.findUnique({
-        where: { id: user.id },
-        select: { branchId: true },
-      });
+      const staffBranchId =
+        user.branchId !== undefined
+          ? user.branchId
+          : (
+              await this.prisma.user.findUnique({
+                where: { id: user.id },
+                select: { branchId: true },
+              })
+            )?.branchId;
 
-      if (!staffUser || staffUser.branchId !== branchId) {
+      if (!staffBranchId || staffBranchId !== branchId) {
         throw new ForbiddenException('Bạn không có quyền quản lý thực đơn của chi nhánh này.');
       }
     }
@@ -43,14 +43,40 @@ export class BranchMenuService {
     return branch;
   }
 
-  /**
-   * Lấy danh sách thực đơn của chi nhánh kèm thống kê KPI nhanh
-   */
+  private async updateBranchMenuItem(
+    branchId: string,
+    menuItemId: string,
+    data: Prisma.BranchMenuItemUpdateInput,
+    user: ICurrentUser,
+  ) {
+    await this.validateBranchAccess(branchId, user);
+
+    const record = await this.prisma.branchMenuItem.findUnique({
+      where: {
+        branchId_menuItemId: { branchId, menuItemId },
+      },
+    });
+
+    if (!record) {
+      throw new NotFoundException('Món ăn này chưa được gán vào chi nhánh.');
+    }
+
+    return this.prisma.branchMenuItem.update({
+      where: {
+        branchId_menuItemId: { branchId, menuItemId },
+      },
+      data,
+      include: {
+        menuItem: {
+          include: { category: true },
+        },
+      },
+    });
+  }
+
   async getBranchMenu(branchId: string, query: QueryBranchMenuDto, user: ICurrentUser) {
     const branch = await this.validateBranchAccess(branchId, user);
-
-    // Tự động đồng bộ các món mới của chuỗi vào chi nhánh nếu chưa có
-    await this.syncBranchMenu(branchId, user);
+    await this.syncBranchMenuInternal(branchId);
 
     const menuItemWhere: Prisma.MenuItemWhereInput = {
       isActive: true,
@@ -102,7 +128,6 @@ export class BranchMenuService {
         ],
       }),
       this.prisma.branchMenuItem.count({ where }),
-      // Thống kê nhanh toàn bộ chi nhánh
       this.prisma.branchMenuItem.count({
         where: { branchId, isAvailable: true, isActive: true, menuItem: { isActive: true } },
       }),
@@ -138,122 +163,38 @@ export class BranchMenuService {
     );
   }
 
-  /**
-   * Bật/tắt trạng thái Còn hàng / Tạm hết hôm nay (1 chạm)
-   */
   async updateAvailability(
     branchId: string,
     menuItemId: string,
     dto: UpdateBranchMenuAvailabilityDto,
     user: ICurrentUser,
   ) {
-    await this.validateBranchAccess(branchId, user);
-
-    const record = await this.prisma.branchMenuItem.findUnique({
-      where: {
-        branchId_menuItemId: { branchId, menuItemId },
-      },
-    });
-
-    if (!record) {
-      throw new NotFoundException('Món ăn này chưa được gán vào chi nhánh.');
-    }
-
-    return this.prisma.branchMenuItem.update({
-      where: {
-        branchId_menuItemId: { branchId, menuItemId },
-      },
-      data: {
-        isAvailable: dto.isAvailable,
-      },
-      include: {
-        menuItem: {
-          include: { category: true },
-        },
-      },
-    });
+    return this.updateBranchMenuItem(branchId, menuItemId, { isAvailable: dto.isAvailable }, user);
   }
 
-  /**
-   * Bật/tắt trạng thái phục vụ (Kinh doanh / Ngừng bán) tại chi nhánh
-   */
   async updateStatus(
     branchId: string,
     menuItemId: string,
     dto: UpdateBranchMenuStatusDto,
     user: ICurrentUser,
   ) {
-    await this.validateBranchAccess(branchId, user);
-
-    const record = await this.prisma.branchMenuItem.findUnique({
-      where: {
-        branchId_menuItemId: { branchId, menuItemId },
-      },
-    });
-
-    if (!record) {
-      throw new NotFoundException('Món ăn này chưa được gán vào chi nhánh.');
-    }
-
-    return this.prisma.branchMenuItem.update({
-      where: {
-        branchId_menuItemId: { branchId, menuItemId },
-      },
-      data: {
-        isActive: dto.isActive,
-      },
-      include: {
-        menuItem: {
-          include: { category: true },
-        },
-      },
-    });
+    return this.updateBranchMenuItem(branchId, menuItemId, { isActive: dto.isActive }, user);
   }
 
-  /**
-   * Cập nhật hoặc hủy giá riêng (Price Override) của chi nhánh
-   */
   async updatePriceOverride(
     branchId: string,
     menuItemId: string,
     dto: UpdateBranchMenuPriceDto,
     user: ICurrentUser,
   ) {
-    await this.validateBranchAccess(branchId, user);
-
-    const record = await this.prisma.branchMenuItem.findUnique({
-      where: {
-        branchId_menuItemId: { branchId, menuItemId },
-      },
-    });
-
-    if (!record) {
-      throw new NotFoundException('Món ăn này chưa được gán vào chi nhánh.');
-    }
-
     const priceOverride =
       dto.priceOverride !== undefined && dto.priceOverride !== null
         ? new Prisma.Decimal(dto.priceOverride)
         : null;
 
-    return this.prisma.branchMenuItem.update({
-      where: {
-        branchId_menuItemId: { branchId, menuItemId },
-      },
-      data: {
-        priceOverride,
-      },
-      include: {
-        menuItem: {
-          include: { category: true },
-        },
-      },
-    });
+    return this.updateBranchMenuItem(branchId, menuItemId, { priceOverride }, user);
   }
 
-  /**
-   * Cập nhật trạng thái hàng loạt cho nhiều món
-   */
   async bulkUpdate(
     branchId: string,
     dto: BulkUpdateBranchMenuDto,
@@ -282,14 +223,7 @@ export class BranchMenuService {
     };
   }
 
-  /**
-   * Đồng bộ tất cả các món ăn đang có trong chuỗi vào chi nhánh
-   */
-  async syncBranchMenu(branchId: string, user?: ICurrentUser) {
-    if (user) {
-      await this.validateBranchAccess(branchId, user);
-    }
-
+  private async syncBranchMenuInternal(branchId: string) {
     const activeMenuItems = await this.prisma.menuItem.findMany({
       where: { isActive: true },
       select: { id: true },
@@ -310,5 +244,12 @@ export class BranchMenuService {
     });
 
     return { syncedCount: result.count };
+  }
+
+  async syncBranchMenu(branchId: string, user?: ICurrentUser) {
+    if (user) {
+      await this.validateBranchAccess(branchId, user);
+    }
+    return this.syncBranchMenuInternal(branchId);
   }
 }

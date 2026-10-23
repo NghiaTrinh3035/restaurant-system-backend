@@ -1,18 +1,17 @@
 import {
-    Body,
-    Controller,
-    Delete,
-    Get,
-    HttpCode,
-    HttpStatus,
-    Param,
-    Patch,
-    Post,
-    Put,
-    Query,
-    UseGuards,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Patch,
+  Post,
+  Put,
+  Query,
+  UseGuards,
 } from '@nestjs/common';
-
 import { RestaurantBranchService } from '../services/restaurant-branch.service';
 import { ResponseMessage } from 'src/core/common/decorators/response-message.decorator';
 import { Role } from '@prisma/client';
@@ -29,125 +28,102 @@ import type { ICurrentUser } from 'src/core/common/interfaces/current-user.inter
 
 @Controller('/restaurants/branches')
 export class RestaurantBranchController {
+  constructor(
+    private readonly restaurantBranchService: RestaurantBranchService,
+  ) {}
 
-    constructor(
-        private readonly restaurantBranchService: RestaurantBranchService,
-    ) { }
+  @Get('/locations/provinces')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Lấy danh sách Tỉnh/Thành phố thành công.')
+  async getProvinces() {
+    return this.restaurantBranchService.getProvinces();
+  }
 
-    // PUBLIC
-    @Get('/locations/provinces')
-    @Public()
-    @HttpCode(HttpStatus.OK)
-    @ResponseMessage('Lấy danh sách Tỉnh/Thành phố thành công.')
-    async getProvinces() {
-        return this.restaurantBranchService.getProvinces();
-    }
+  @Get('/locations/provinces/:code/wards')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Lấy danh sách Phường/Xã thành công.')
+  async getWardsByProvince(@Param('code') code: string) {
+    return this.restaurantBranchService.getWardsByProvince(code);
+  }
 
-    // PUBLIC
-    @Get('/locations/provinces/:code/wards')
-    @Public()
-    @HttpCode(HttpStatus.OK)
-    @ResponseMessage('Lấy danh sách Phường/Xã thành công.')
-    async getWardsByProvince(@Param('code') code: string) {
-        return this.restaurantBranchService.getWardsByProvince(code);
-    }
+  @Get()
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Lấy danh sách chi nhánh nhà hàng thành công.')
+  async getRestaurantBranches(@Query() query: QueryRestaurantBranchDto) {
+    return this.restaurantBranchService.getRestaurantBranches(query);
+  }
 
-    // PUBLIC
-    @Get()
-    @Public()
-    @HttpCode(HttpStatus.OK)
-    @ResponseMessage('Lấy danh sách chi nhánh nhà hàng thành công.')
-    async getRestaurantBranches(@Query() query: QueryRestaurantBranchDto) {
-        return this.restaurantBranchService.getRestaurantBranches(query);
-    }
+  @Get('/:id')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Lấy thông tin chi nhánh nhà hàng thành công.')
+  async getRestaurantBranch(@Param('id') id: string) {
+    return this.restaurantBranchService.getRestaurantBranch(id);
+  }
 
-    // PUBLIC
-    @Get('/:id')
-    @Public()
-    @HttpCode(HttpStatus.OK)
-    @ResponseMessage('Lấy thông tin chi nhánh nhà hàng thành công.')
-    async getRestaurantBranch(
-        @Param('id') id: string,
-    ) {
-        return this.restaurantBranchService.getRestaurantBranch(id);
-    }
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @ResponseMessage('Thêm chi nhánh nhà hàng thành công.')
+  async createRestaurantBranch(@Body() dto: CreateRestaurantBranchDto) {
+    return this.restaurantBranchService.createRestaurantBranch(dto);
+  }
 
-    // ADMIN ONLY
-    @Post()
-    @HttpCode(HttpStatus.CREATED)
-    @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(Role.ADMIN)
-    @ResponseMessage('Thêm chi nhánh nhà hàng thành công.')
-    async createRestaurantBranch(
-        @Body() dto: CreateRestaurantBranchDto,
-    ) {
-        return this.restaurantBranchService.createRestaurantBranch(dto);
-    }
+  @Patch('/:id')
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Cập nhật chi nhánh nhà hàng thành công.')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  async updateRestaurantBranch(
+    @Param('id') id: string,
+    @Body() dto: UpdateRestaurantBranchDto,
+  ) {
+    return this.restaurantBranchService.updateRestaurantBranch(id, dto);
+  }
 
-    @Patch('/:id')
-    @HttpCode(HttpStatus.OK)
-    @ResponseMessage('Cập nhật chi nhánh nhà hàng thành công.')
-    @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(Role.ADMIN)
-    async updateRestaurantBranch(
-        @Param('id') id: string,
-        @Body() dto: UpdateRestaurantBranchDto,
-    ) {
-        return this.restaurantBranchService.updateRestaurantBranch(id, dto);
-    }
+  @Delete('/:id')
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Xóa chi nhánh nhà hàng thành công.')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  async deleteRestaurantBranch(@Param('id') id: string) {
+    return this.restaurantBranchService.deleteRestaurantBranch(id);
+  }
 
-    @Delete('/:id')
-    @HttpCode(HttpStatus.OK)
-    @ResponseMessage('Xóa chi nhánh nhà hàng thành công.')
-    @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(Role.ADMIN)
-    async deleteRestaurantBranch(
-        @Param('id') id: string,
-    ) {
-        return this.restaurantBranchService.deleteRestaurantBranch(id);
-    }
+  @Get('/:id/operating-hours')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Lấy khung giờ hoạt động chi nhánh thành công.')
+  async getOperatingHours(@Param('id') id: string) {
+    return this.restaurantBranchService.getOperatingHours(id);
+  }
 
-    /**
-     * Lấy khung giờ hoạt động chung và chi tiết 7 ngày trong tuần
-     */
-    @Get('/:id/operating-hours')
-    @Public()
-    @HttpCode(HttpStatus.OK)
-    @ResponseMessage('Lấy khung giờ hoạt động chi nhánh thành công.')
-    async getOperatingHours(
-        @Param('id') id: string,
-    ) {
-        return this.restaurantBranchService.getOperatingHours(id);
-    }
+  @Put('/:id/operating-hours')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.STAFF)
+  @ResponseMessage('Cập nhật khung giờ hoạt động chi nhánh thành công.')
+  async updateOperatingHours(
+    @Param('id') id: string,
+    @Body() dto: UpdateBranchOperatingHoursDto,
+    @CurrentUser() user: ICurrentUser,
+  ) {
+    return this.restaurantBranchService.updateOperatingHours(id, dto, user);
+  }
 
-    /**
-     * Cập nhật khung giờ mở/đóng cửa và thời lượng slot dùng bữa
-     */
-    @Put('/:id/operating-hours')
-    @HttpCode(HttpStatus.OK)
-    @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(Role.ADMIN, Role.STAFF)
-    @ResponseMessage('Cập nhật khung giờ hoạt động chi nhánh thành công.')
-    async updateOperatingHours(
-        @Param('id') id: string,
-        @Body() dto: UpdateBranchOperatingHoursDto,
-        @CurrentUser() user: ICurrentUser,
-    ) {
-        return this.restaurantBranchService.updateOperatingHours(id, dto, user);
-    }
-
-    /**
-     * Lấy thống kê năng lực sức chứa (bàn, ghế, phân loại bàn) của chi nhánh
-     */
-    @Get('/:id/capacity')
-    @HttpCode(HttpStatus.OK)
-    @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(Role.ADMIN, Role.STAFF)
-    @ResponseMessage('Lấy thống kê sức chứa chi nhánh thành công.')
-    async getBranchCapacity(
-        @Param('id') id: string,
-        @CurrentUser() user: ICurrentUser,
-    ) {
-        return this.restaurantBranchService.getBranchCapacity(id, user);
-    }
+  @Get('/:id/capacity')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.STAFF)
+  @ResponseMessage('Lấy thống kê sức chứa chi nhánh thành công.')
+  async getBranchCapacity(
+    @Param('id') id: string,
+    @CurrentUser() user: ICurrentUser,
+  ) {
+    return this.restaurantBranchService.getBranchCapacity(id, user);
+  }
 }
