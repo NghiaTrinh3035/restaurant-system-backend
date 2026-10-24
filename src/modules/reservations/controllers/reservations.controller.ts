@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -14,6 +15,7 @@ import { ReservationsService } from '../services/reservations.service';
 import { CreateReservationDto } from '../dto/create-reservation.dto';
 import { QueryAvailableSlotsDto } from '../dto/query-available-slots.dto';
 import { QueryReservationDto } from '../dto/query-reservation.dto';
+import { UpdatePreOrdersDto } from '../dto/update-preorders.dto';
 import { ResponseMessage } from 'src/core/common/decorators/response-message.decorator';
 import { Public } from 'src/core/common/decorators/public.decorator';
 import { CurrentUser } from 'src/core/common/decorators/current-user.decorator';
@@ -76,5 +78,28 @@ export class ReservationsController {
     @CurrentUser() user?: ICurrentUser,
   ) {
     return this.reservationsService.cancelReservation(id, reason, user);
+  }
+
+  @Get(':id/pre-orders')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Lấy danh sách món ăn đặt trước thành công.')
+  async getPreOrders(
+    @Param('id') id: string,
+    @CurrentUser() user?: ICurrentUser,
+  ) {
+    return this.reservationsService.getPreOrders(id, user);
+  }
+
+  @Put(':id/pre-orders')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Cập nhật món ăn đặt trước thành công.')
+  async updatePreOrders(
+    @Param('id') id: string,
+    @Body() dto: UpdatePreOrdersDto,
+    @CurrentUser() user?: ICurrentUser,
+  ) {
+    return this.reservationsService.addOrUpdatePreOrders(id, dto.items, user);
   }
 }
