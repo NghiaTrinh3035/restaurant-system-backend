@@ -1,4 +1,10 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { TableLockService } from '../services/table-lock.service';
+import { SearchAvailableTablesDto } from '../dto/search-available-tables.dto';
+import { Public } from 'src/core/common/decorators/public.decorator';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { AuthJwtService } from 'src/core/security/jwt/auth-jwt.service';
+import type { Request } from 'express';
 import { TablesService } from '../services/tables.service';
 import { CreateTableTypeDto } from '../dto/table-type.dto';
 import { CreateRestaurantTableDto } from '../dto/restaurant-table.dto';
@@ -13,9 +19,31 @@ import { Roles } from 'src/core/common/decorators/roles.decorator';
 import { Role } from '@prisma/client';
 import { ResponseMessage } from 'src/core/common/decorators/response-message.decorator';
 
+@ApiTags('Tables')
 @Controller('tables')
 export class TablesController {
-  constructor(private readonly tablesService: TablesService) {}
+  constructor(
+    private readonly tablesService: TablesService,
+    private readonly tableLockService: TableLockService,
+    private readonly authJwtService: AuthJwtService,
+  ) {}
+
+  private extractUserId(req: Request): string | undefined {
+    try {
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.substring(7);
+        const decoded = this.authJwtService.decodeToken(token);
+        return decoded?.sub;
+      }
+      const cookieToken = (req as any).cookies?.accessToken;
+      if (cookieToken) {
+        const decoded = this.authJwtService.decodeToken(cookieToken);
+        return decoded?.sub;
+      }
+    } catch {}
+    return undefined;
+  }
 
   // ==========================================
   // TABLE TYPE
@@ -81,6 +109,18 @@ export class TablesController {
   @ResponseMessage('Lấy danh sách bàn thành công')
   getRestaurantTables(@Query() query: QueryRestaurantTableDto) {
     return this.tablesService.getRestaurantTables(query);
+  }
+
+  @Get('search-available')
+  @Public()
+  @ApiOperation({ summary: 'Tìm kiếm bàn trống theo chi nhánh và số lượng khách (kèm tình trạng giữ chỗ)' })
+  @ResponseMessage('Tìm kiếm bàn trống thành công')
+  searchAvailableTables(
+    @Query() dto: SearchAvailableTablesDto,
+    @Req() req: Request,
+  ) {
+    const currentUserId = this.extractUserId(req);
+    return this.tableLockService.searchAvailableTables(dto, currentUserId);
   }
 
   @Get('branch/:branchId')
