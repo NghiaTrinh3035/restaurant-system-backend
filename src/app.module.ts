@@ -14,6 +14,7 @@ import { TablesModule } from './modules/tables/tables.module';
 import { RedisModule } from './redis/redis.module';
 import { JwtAuthGuard } from './core/common/guards/jwt-auth.guard';
 import { AuthJwtModule } from './core/security/jwt/jwt.module';
+import { GatewayModule } from './gateway/gateway.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { AuthJwtModule } from './core/security/jwt/jwt.module';
     ReviewsModule,
     TablesModule,
     AuthJwtModule,
+    GatewayModule,
   ],
   controllers: [],
   providers: [
