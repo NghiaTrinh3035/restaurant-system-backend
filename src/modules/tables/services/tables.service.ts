@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateRestaurantTableDto } from '../dto/restaurant-table.dto';
 import { CreateTableTypeDto } from '../dto/table-type.dto';
@@ -7,13 +12,14 @@ import { UpdateTableTypeDto } from '../dto/update-table-type.dto';
 import { BulkCreateRestaurantTableDto } from '../dto/bulk-create-restaurant-table.dto';
 import { QueryTableTypeDto } from '../dto/query-table-type.dto';
 import { QueryRestaurantTableDto } from '../dto/query-restaurant-table.dto';
-import { Prisma } from '@prisma/client';
-
+import { UpdateTableStatusDto } from '../dto/update-table-status.dto';
+import { Prisma, RestaurantTableStatus, Role } from '@prisma/client';
 import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
+import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
 
 @Injectable()
 export class TablesService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(private readonly prisma: PrismaService) {}
 
   // ==========================================
   // TABLE TYPE
@@ -45,8 +51,8 @@ export class TablesService {
       });
     }
 
-    const page = query ? query.page : 1;
-    const limit = query ? query.limit : 10;
+    const page = query.page || 1;
+    const limit = query.limit || 10;
     const skip = (page - 1) * limit;
 
     const [items, totalItems] = await Promise.all([
@@ -69,14 +75,17 @@ export class TablesService {
     const tableType = await this.prisma.tableType.findUnique({
       where: { id },
     });
+
     if (!tableType) {
       throw new NotFoundException('Table type not found');
     }
+
     return tableType;
   }
 
   async updateTableType(id: string, dto: UpdateTableTypeDto) {
-    await this.getTableTypeById(id); // validate exists
+    await this.getTableTypeById(id);
+
     return this.prisma.tableType.update({
       where: { id },
       data: dto,
@@ -84,14 +93,7 @@ export class TablesService {
   }
 
   async deleteTableType(id: string) {
-    await this.getTableTypeById(id); // validate exists
-    
-    const tablesCount = await this.prisma.restaurantTable.count({
-      where: { tableTypeId: id },
-    });
-    if (tablesCount > 0) {
-      throw new ConflictException('Cannot delete table type as it is currently assigned to one or more tables');
-    }
+    await this.getTableTypeById(id);
 
     return this.prisma.tableType.delete({
       where: { id },
@@ -103,7 +105,6 @@ export class TablesService {
   // ==========================================
 
   async createRestaurantTable(dto: CreateRestaurantTableDto) {
-    // Validate branch exists
     const branch = await this.prisma.restaurantBranch.findUnique({
       where: { id: dto.branchId },
     });
@@ -111,7 +112,6 @@ export class TablesService {
       throw new NotFoundException('Branch not found');
     }
 
-    // Validate table type exists
     const tableType = await this.prisma.tableType.findUnique({
       where: { id: dto.tableTypeId },
     });
@@ -119,7 +119,6 @@ export class TablesService {
       throw new NotFoundException('Table type not found');
     }
 
-    // Check duplicate table number in the same branch
     const existingTable = await this.prisma.restaurantTable.findFirst({
       where: {
         branchId: dto.branchId,
@@ -127,19 +126,17 @@ export class TablesService {
       },
     });
     if (existingTable) {
-      throw new ConflictException(`Table number ${dto.tableNumber} already exists in this branch`);
+      throw new ConflictException(
+        `Table number ${dto.tableNumber} already exists in this branch`,
+      );
     }
 
     return this.prisma.restaurantTable.create({
-      data: {
-        ...dto,
-        status: dto.status,
-      },
+      data: dto,
     });
   }
 
   async bulkCreateRestaurantTables(dto: BulkCreateRestaurantTableDto) {
-    // Validate branch exists
     const branch = await this.prisma.restaurantBranch.findUnique({
       where: { id: dto.branchId },
     });
@@ -147,7 +144,6 @@ export class TablesService {
       throw new NotFoundException('Branch not found');
     }
 
-    // Validate table type exists
     const tableType = await this.prisma.tableType.findUnique({
       where: { id: dto.tableTypeId },
     });
@@ -155,73 +151,63 @@ export class TablesService {
       throw new NotFoundException('Table type not found');
     }
 
-    // Generate table numbers
+    const start = dto.startNumber || 1;
+    const count = dto.quantity;
+    const prefix = dto.prefix || `F${dto.floor}-`;
+
     const tableNumbers: string[] = [];
-    for (let i = 0; i < dto.quantity; i++) {
-      const num = dto.startNumber + i;
-      const formattedNum = num < 10 ? `0${num}` : `${num}`;
-      tableNumbers.push(`${dto.prefix}${formattedNum}`);
+    for (let i = 0; i < count; i++) {
+      const num = (start + i).toString().padStart(2, '0');
+      tableNumbers.push(`${prefix}${num}`);
     }
 
-    // Check duplicate table numbers in the same branch
-    const existingTables = await this.prisma.restaurantTable.findMany({
+    const existing = await this.prisma.restaurantTable.findMany({
       where: {
         branchId: dto.branchId,
-        tableNumber: {
-          in: tableNumbers,
-        },
+        tableNumber: { in: tableNumbers },
       },
+      select: { tableNumber: true },
     });
 
-    const existingTableNumbers = existingTables.map(t => t.tableNumber);
-    const newTableNumbers = tableNumbers.filter(num => !existingTableNumbers.includes(num));
-
-    if (newTableNumbers.length === 0) {
-      throw new ConflictException('Tất cả các bàn được yêu cầu tạo đều đã tồn tại trong chi nhánh này.');
+    if (existing.length > 0) {
+      const duplicates = existing.map((t) => t.tableNumber).join(', ');
+      throw new ConflictException(
+        `Các bàn sau đã tồn tại trong chi nhánh: ${duplicates}`,
+      );
     }
 
-    const tablesData = newTableNumbers.map(tableNumber => ({
+    const tablesToCreate = tableNumbers.map((tableNumber) => ({
       tableNumber,
       floor: dto.floor,
-      status: dto.status,
-      note: dto.note,
       branchId: dto.branchId,
       tableTypeId: dto.tableTypeId,
+      note: dto.note,
     }));
 
-    const result = await this.prisma.restaurantTable.createMany({
-      data: tablesData,
+    return this.prisma.restaurantTable.createMany({
+      data: tablesToCreate,
     });
-
-    const message = existingTables.length > 0 
-      ? `Tạo thành công ${result.count} bàn (Đã bỏ qua ${existingTables.length} bàn bị trùng: ${existingTableNumbers.join(', ')})`
-      : 'Tạo hàng loạt bàn thành công';
-
-    return {
-      message: message,
-      count: result.count,
-    };
   }
 
   async getRestaurantTables(query?: QueryRestaurantTableDto) {
     const where: Prisma.RestaurantTableWhereInput = {
-      isActive: query?.isActive !== undefined ? query.isActive : true,
+      isActive: true,
     };
 
-    if (query?.branchId && query.branchId !== 'ALL') {
+    if (query?.branchId) {
       where.branchId = query.branchId;
     }
 
-    if (query?.tableTypeId && query.tableTypeId !== 'ALL') {
+    if (query?.tableTypeId) {
       where.tableTypeId = query.tableTypeId;
-    }
-
-    if (query?.status) {
-      where.status = query.status;
     }
 
     if (query?.floor) {
       where.floor = query.floor;
+    }
+
+    if (query?.status) {
+      where.status = query.status;
     }
 
     if (query?.search && query.search.trim()) {
@@ -232,23 +218,28 @@ export class TablesService {
       ];
     }
 
-    if (!query || (!query.page && !query.limit && !query.search && !query.branchId && !query.tableTypeId && !query.status && !query.floor)) {
+    if (
+      !query ||
+      (!query.page &&
+        !query.limit &&
+        !query.search &&
+        !query.branchId &&
+        !query.tableTypeId &&
+        !query.floor &&
+        !query.status)
+    ) {
       return this.prisma.restaurantTable.findMany({
         where,
+        orderBy: [{ floor: 'asc' }, { tableNumber: 'asc' }],
         include: {
-          branch: true,
           tableType: true,
+          branch: { select: { id: true, name: true } },
         },
-        orderBy: [
-          { branch: { name: 'asc' } },
-          { floor: 'asc' },
-          { tableNumber: 'asc' },
-        ],
       });
     }
 
-    const page = query ? query.page : 1;
-    const limit = query ? query.limit : 10;
+    const page = query.page || 1;
+    const limit = query.limit || 10;
     const skip = (page - 1) * limit;
 
     const [items, totalItems] = await Promise.all([
@@ -256,15 +247,11 @@ export class TablesService {
         where,
         skip,
         take: limit,
+        orderBy: [{ floor: 'asc' }, { tableNumber: 'asc' }],
         include: {
-          branch: true,
           tableType: true,
+          branch: { select: { id: true, name: true } },
         },
-        orderBy: [
-          { branch: { name: 'asc' } },
-          { floor: 'asc' },
-          { tableNumber: 'asc' },
-        ],
       }),
       this.prisma.restaurantTable.count({ where }),
     ]);
@@ -275,39 +262,33 @@ export class TablesService {
     };
   }
 
+  async getRestaurantTablesByBranch(branchId: string) {
+    return this.prisma.restaurantTable.findMany({
+      where: {
+        branchId,
+        isActive: true,
+      },
+      orderBy: [{ floor: 'asc' }, { tableNumber: 'asc' }],
+      include: {
+        tableType: true,
+      },
+    });
+  }
+
   async getRestaurantTableById(id: string) {
     const table = await this.prisma.restaurantTable.findUnique({
       where: { id },
       include: {
-        branch: true,
         tableType: true,
+        branch: { select: { id: true, name: true } },
       },
     });
+
     if (!table) {
       throw new NotFoundException('Restaurant table not found');
     }
+
     return table;
-  }
-
-  async getRestaurantTablesByBranch(branchId: string) {
-    const branch = await this.prisma.restaurantBranch.findUnique({
-      where: { id: branchId },
-    });
-    if (!branch) {
-      throw new NotFoundException('Branch not found');
-    }
-
-    return this.prisma.restaurantTable.findMany({
-      where: { branchId, isActive: true },
-      include: {
-        tableType: true,
-        branch: true,
-      },
-      orderBy: [
-        { floor: 'asc' },
-        { tableNumber: 'asc' },
-      ],
-    });
   }
 
   async updateRestaurantTable(id: string, dto: UpdateRestaurantTableDto) {
@@ -331,20 +312,22 @@ export class TablesService {
       }
     }
 
-    // Check duplicate if changing branchId or tableNumber
     const targetBranchId = dto.branchId !== undefined ? dto.branchId : table.branchId;
-    const targetTableNumber = dto.tableNumber !== undefined ? dto.tableNumber : table.tableNumber;
-    
+    const targetTableNumber =
+      dto.tableNumber !== undefined ? dto.tableNumber : table.tableNumber;
+
     if (targetBranchId !== table.branchId || targetTableNumber !== table.tableNumber) {
       const existingTable = await this.prisma.restaurantTable.findFirst({
         where: {
           branchId: targetBranchId,
           tableNumber: targetTableNumber,
-          id: { not: id }, // Exclude current table
+          id: { not: id },
         },
       });
       if (existingTable) {
-        throw new ConflictException(`Table number ${targetTableNumber} already exists in this branch`);
+        throw new ConflictException(
+          `Table number ${targetTableNumber} already exists in this branch`,
+        );
       }
     }
 
@@ -355,11 +338,98 @@ export class TablesService {
   }
 
   async deleteRestaurantTable(id: string) {
-    await this.getRestaurantTableById(id); // validate exists
+    await this.getRestaurantTableById(id);
 
     return this.prisma.restaurantTable.update({
       where: { id },
       data: { isActive: false },
     });
+  }
+
+  async updateTableStatus(id: string, dto: UpdateTableStatusDto, user?: ICurrentUser) {
+    const table = await this.getRestaurantTableById(id);
+
+    if (user && user.role === Role.STAFF) {
+      if (user.branchId && user.branchId !== table.branchId) {
+        throw new ForbiddenException('Bạn không có quyền quản lý bàn của chi nhánh này.');
+      }
+    }
+
+    const dataToUpdate: Prisma.RestaurantTableUpdateInput = {
+      status: dto.status,
+    };
+    if (dto.note !== undefined) {
+      dataToUpdate.note = dto.note;
+    }
+
+    return this.prisma.restaurantTable.update({
+      where: { id },
+      data: dataToUpdate,
+      include: {
+        tableType: true,
+        branch: { select: { id: true, name: true } },
+      },
+    });
+  }
+
+  async getTableTurnoverStats(branchId: string, user?: ICurrentUser) {
+    if (user && user.role === Role.STAFF) {
+      if (user.branchId && user.branchId !== branchId) {
+        throw new ForbiddenException('Bạn không có quyền truy cập thông tin chi nhánh này.');
+      }
+    }
+
+    const tables = await this.prisma.restaurantTable.findMany({
+      where: {
+        branchId,
+        isActive: true,
+      },
+      orderBy: [{ floor: 'asc' }, { tableNumber: 'asc' }],
+      include: {
+        tableType: true,
+      },
+    });
+
+    let available = 0;
+    let occupied = 0;
+    let dirty = 0;
+    let maintenance = 0;
+
+    const floorMap = new Map<number, typeof tables>();
+
+    for (const t of tables) {
+      if (t.status === RestaurantTableStatus.AVAILABLE) available++;
+      else if (t.status === RestaurantTableStatus.OCCUPIED) occupied++;
+      else if (t.status === RestaurantTableStatus.DIRTY) dirty++;
+      else if (t.status === RestaurantTableStatus.MAINTENANCE) maintenance++;
+
+      const list = floorMap.get(t.floor) || [];
+      list.push(t);
+      floorMap.set(t.floor, list);
+    }
+
+    const totalActive = tables.length;
+    const occupancyRate =
+      totalActive > 0 ? Math.round((occupied / totalActive) * 100) : 0;
+
+    const floors = Array.from(floorMap.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([floor, floorTables]) => ({
+        floor,
+        tables: floorTables,
+      }));
+
+    return {
+      branchId,
+      summary: {
+        total: totalActive,
+        available,
+        occupied,
+        dirty,
+        maintenance,
+        occupancyRate,
+      },
+      floors,
+    };
   }
 }

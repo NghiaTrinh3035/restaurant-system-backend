@@ -1,10 +1,11 @@
 model TableType {
-  id          String  @id @default(uuid()) @db.Uuid
+  id          String            @id @default(uuid()) @db.Uuid
   name        String
   capacity    Int
   description String?
 
-  tables      RestaurantTable[]
+  tables       RestaurantTable[]
+  reservations Reservation[]
 
   @@map("table_types")
 }
@@ -20,8 +21,9 @@ model RestaurantTable {
   branchId    String                @db.Uuid
   tableTypeId String                @db.Uuid
 
-  branch      RestaurantBranch      @relation(fields: [branchId], references: [id])
-  tableType   TableType             @relation(fields: [tableTypeId], references: [id])
+  branch       RestaurantBranch      @relation(fields: [branchId], references: [id])
+  tableType    TableType             @relation(fields: [tableTypeId], references: [id])
+  reservations Reservation[]
 
   @@unique([branchId, tableNumber])
   @@index([branchId, isActive])

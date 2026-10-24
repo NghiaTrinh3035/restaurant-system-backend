@@ -5,6 +5,17 @@ import { Public } from 'src/core/common/decorators/public.decorator';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthJwtService } from 'src/core/security/jwt/auth-jwt.service';
 import type { Request } from 'express';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { TablesService } from '../services/tables.service';
 import { CreateTableTypeDto } from '../dto/table-type.dto';
 import { CreateRestaurantTableDto } from '../dto/restaurant-table.dto';
@@ -13,11 +24,14 @@ import { UpdateRestaurantTableDto } from '../dto/update-restaurant-table.dto';
 import { BulkCreateRestaurantTableDto } from '../dto/bulk-create-restaurant-table.dto';
 import { QueryTableTypeDto } from '../dto/query-table-type.dto';
 import { QueryRestaurantTableDto } from '../dto/query-restaurant-table.dto';
+import { UpdateTableStatusDto } from '../dto/update-table-status.dto';
 import { JwtAuthGuard } from 'src/core/common/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/core/common/guards/roles.guard';
 import { Roles } from 'src/core/common/decorators/roles.decorator';
 import { Role } from '@prisma/client';
 import { ResponseMessage } from 'src/core/common/decorators/response-message.decorator';
+import { CurrentUser } from 'src/core/common/decorators/current-user.decorator';
+import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
 
 @ApiTags('Tables')
 @Controller('tables')
@@ -121,6 +135,15 @@ export class TablesController {
   ) {
     const currentUserId = this.extractUserId(req);
     return this.tableLockService.searchAvailableTables(dto, currentUserId);
+  @Get('branch/:branchId/turnover')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.STAFF, Role.ADMIN)
+  @ResponseMessage('Lấy dữ liệu xoay vòng và dọn dẹp bàn thành công')
+  getTableTurnoverStats(
+    @Param('branchId') branchId: string,
+    @CurrentUser() user: ICurrentUser,
+  ) {
+    return this.tablesService.getTableTurnoverStats(branchId, user);
   }
 
   @Get('branch/:branchId')
@@ -135,11 +158,26 @@ export class TablesController {
     return this.tablesService.getRestaurantTableById(id);
   }
 
+  @Patch(':id/status')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.STAFF, Role.ADMIN)
+  @ResponseMessage('Cập nhật trạng thái dọn dẹp / phục vụ của bàn thành công')
+  updateTableStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateTableStatusDto,
+    @CurrentUser() user: ICurrentUser,
+  ) {
+    return this.tablesService.updateTableStatus(id, dto, user);
+  }
+
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
   @ResponseMessage('Cập nhật bàn thành công')
-  updateRestaurantTable(@Param('id') id: string, @Body() dto: UpdateRestaurantTableDto) {
+  updateRestaurantTable(
+    @Param('id') id: string,
+    @Body() dto: UpdateRestaurantTableDto,
+  ) {
     return this.tablesService.updateRestaurantTable(id, dto);
   }
 

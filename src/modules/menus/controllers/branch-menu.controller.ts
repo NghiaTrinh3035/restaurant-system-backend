@@ -19,6 +19,7 @@ import {
   BulkUpdateBranchMenuDto,
 } from '../dto/branch-menu.dto';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../../../core/common/guards/jwt-auth.guard';
 import { Roles } from '../../../core/common/decorators/roles.decorator';
 import { RolesGuard } from '../../../core/common/guards/roles.guard';
 import { CurrentUser } from '../../../core/common/decorators/current-user.decorator';
@@ -32,9 +33,6 @@ import { Role } from '@prisma/client';
 export class BranchMenuController {
   constructor(private readonly branchMenuService: BranchMenuService) {}
 
-  /**
-   * Khách hàng xem thực đơn chi nhánh (Public)
-   */
   @Get('public')
   @Public()
   @HttpCode(HttpStatus.OK)
@@ -44,7 +42,6 @@ export class BranchMenuController {
     @Param('branchId') branchId: string,
     @Query() query: QueryBranchMenuDto,
   ) {
-    // Với khách hàng, chỉ lấy món đang bán tại chi nhánh
     query.isActive = true;
     return this.branchMenuService.getBranchMenu(branchId, query, {
       id: '',
@@ -53,13 +50,10 @@ export class BranchMenuController {
     });
   }
 
-  /**
-   * Quản lý / Nhân viên xem thực đơn chi nhánh
-   */
   @Get()
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
-  @UseGuards(RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.STAFF)
   @ApiOperation({ summary: 'Lấy thực đơn chi nhánh (Admin / Nhân viên)' })
   @ResponseMessage('Lấy thực đơn chi nhánh thành công.')
@@ -71,13 +65,10 @@ export class BranchMenuController {
     return this.branchMenuService.getBranchMenu(branchId, query, user);
   }
 
-  /**
-   * Cập nhật trạng thái Còn hàng / Tạm hết hôm nay (1 chạm)
-   */
   @Patch(':menuItemId/availability')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
-  @UseGuards(RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.STAFF)
   @ApiOperation({ summary: 'Bật/tắt trạng thái Còn hàng / Tạm hết hôm nay (1 chạm)' })
   @ResponseMessage('Cập nhật trạng thái tình trạng món thành công.')
@@ -90,13 +81,10 @@ export class BranchMenuController {
     return this.branchMenuService.updateAvailability(branchId, menuItemId, dto, user);
   }
 
-  /**
-   * Cập nhật trạng thái phục vụ / ngừng kinh doanh món tại chi nhánh
-   */
   @Patch(':menuItemId/status')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
-  @UseGuards(RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.STAFF)
   @ApiOperation({ summary: 'Bật/tắt phục vụ món này tại chi nhánh' })
   @ResponseMessage('Cập nhật trạng thái phục vụ món tại chi nhánh thành công.')
@@ -109,13 +97,10 @@ export class BranchMenuController {
     return this.branchMenuService.updateStatus(branchId, menuItemId, dto, user);
   }
 
-  /**
-   * Thiết lập giá riêng (Price Override) cho chi nhánh
-   */
   @Patch(':menuItemId/price')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
-  @UseGuards(RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.STAFF)
   @ApiOperation({ summary: 'Cập nhật giá riêng của món tại chi nhánh' })
   @ResponseMessage('Cập nhật giá món chi nhánh thành công.')
@@ -128,13 +113,10 @@ export class BranchMenuController {
     return this.branchMenuService.updatePriceOverride(branchId, menuItemId, dto, user);
   }
 
-  /**
-   * Cập nhật trạng thái hàng loạt cho nhiều món
-   */
   @Patch('bulk')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
-  @UseGuards(RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.STAFF)
   @ApiOperation({ summary: 'Cập nhật trạng thái món hàng loạt' })
   @ResponseMessage('Cập nhật hàng loạt thành công.')
@@ -146,13 +128,10 @@ export class BranchMenuController {
     return this.branchMenuService.bulkUpdate(branchId, dto, user);
   }
 
-  /**
-   * Đồng bộ món mới từ chuỗi vào chi nhánh
-   */
   @Post('sync')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
-  @UseGuards(RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.STAFF)
   @ApiOperation({ summary: 'Đồng bộ món ăn mới từ thực đơn chuỗi vào chi nhánh' })
   @ResponseMessage('Đồng bộ thực đơn chi nhánh thành công.')

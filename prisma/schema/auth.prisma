@@ -17,6 +17,7 @@ model User {
   branch        RestaurantBranch? @relation(fields: [branchId], references: [id])
 
   refreshTokens RefreshToken[]
+  reservations  Reservation[]
 
   @@index([branchId, isActive])
   @@index([role, isActive])
