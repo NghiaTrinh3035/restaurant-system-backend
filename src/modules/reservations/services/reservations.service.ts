@@ -5,7 +5,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { CreateReservationDto } from '../dto/create-reservation.dto';
+import { CreateReservationDto, PreOrderItemDto } from '../dto/create-reservation.dto';
 import { QueryAvailableSlotsDto } from '../dto/query-available-slots.dto';
 import { QueryReservationDto } from '../dto/query-reservation.dto';
 import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
@@ -310,6 +310,89 @@ export class ReservationsService {
         cancelledReason: reason || 'Khách hàng yêu cầu hủy đặt bàn.',
       },
       include: { branch: true },
+    });
+  }
+
+  async getPreOrders(reservationId: string, user?: ICurrentUser) {
+    const reservation = await this.getReservationById(reservationId, user);
+    let totalEstimatedPrice = 0;
+    const orders = (reservation.orders || []).map((o) => {
+      const price = Number(o.unitPrice);
+      totalEstimatedPrice += price * o.quantity;
+      return {
+        ...o,
+        unitPrice: price,
+        subtotal: price * o.quantity,
+      };
+    });
+
+    return {
+      reservationId: reservation.id,
+      reservationCode: reservation.reservationCode,
+      branchId: reservation.branchId,
+      branchName: reservation.branch?.name,
+      orders,
+      totalEstimatedPrice,
+    };
+  }
+
+  async addOrUpdatePreOrders(
+    reservationId: string,
+    items: PreOrderItemDto[],
+    user?: ICurrentUser,
+  ) {
+    const reservation = await this.getReservationById(reservationId, user);
+
+    if (
+      reservation.status === ReservationStatus.COMPLETED ||
+      reservation.status === ReservationStatus.CANCELLED ||
+      reservation.status === ReservationStatus.NO_SHOW
+    ) {
+      throw new BadRequestException('Không thể chỉnh sửa món ăn của đơn đặt bàn này.');
+    }
+
+    const branchMenuItems = await this.prisma.branchMenuItem.findMany({
+      where: {
+        branchId: reservation.branchId,
+        isActive: true,
+        isAvailable: true,
+      },
+      include: { menuItem: true },
+    });
+
+    const menuMap = new Map<string, { price: number; name: string }>();
+    for (const bmi of branchMenuItems) {
+      const finalPrice = bmi.priceOverride !== null ? Number(bmi.priceOverride) : Number(bmi.menuItem.price);
+      menuMap.set(bmi.menuItemId, { price: finalPrice, name: bmi.menuItem.name });
+    }
+
+    for (const item of items) {
+      if (!menuMap.has(item.menuItemId)) {
+        throw new BadRequestException('Món ăn không tồn tại hoặc tạm ngưng phục vụ tại chi nhánh này.');
+      }
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.reservationOrder.deleteMany({
+        where: { reservationId: reservation.id },
+      });
+
+      if (items.length > 0) {
+        for (const item of items) {
+          const info = menuMap.get(item.menuItemId)!;
+          await tx.reservationOrder.create({
+            data: {
+              reservationId: reservation.id,
+              menuItemId: item.menuItemId,
+              quantity: item.quantity,
+              unitPrice: info.price,
+              note: item.note,
+            },
+          });
+        }
+      }
+
+      return this.getPreOrders(reservation.id, user);
     });
   }
 }
