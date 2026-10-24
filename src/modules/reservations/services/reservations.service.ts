@@ -8,6 +8,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateReservationDto, PreOrderItemDto } from '../dto/create-reservation.dto';
 import { QueryAvailableSlotsDto } from '../dto/query-available-slots.dto';
 import { QueryReservationDto } from '../dto/query-reservation.dto';
+import { QueryMyReservationsDto, ReservationTimeline } from '../dto/query-my-reservations.dto';
 import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
 import {
   ReservationStatus,
@@ -265,6 +266,78 @@ export class ReservationsService {
 
     return {
       items,
+      meta: new PaginationMetaDto(page, limit, totalItems),
+    };
+  }
+
+  async getMyReservations(query: QueryMyReservationsDto, user: ICurrentUser) {
+    const where: Prisma.ReservationWhereInput = {
+      userId: user.id,
+    };
+
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+
+    let orderBy: Prisma.ReservationOrderByWithRelationInput[] = [
+      { reservationDate: 'desc' },
+      { reservationTime: 'desc' },
+    ];
+
+    if (query.timeline === ReservationTimeline.UPCOMING) {
+      where.status = { in: [ReservationStatus.PENDING, ReservationStatus.CONFIRMED] };
+      where.reservationDate = { gte: todayStart };
+      orderBy = [{ reservationDate: 'asc' }, { reservationTime: 'asc' }];
+    } else if (query.timeline === ReservationTimeline.PAST) {
+      where.OR = [
+        { status: { in: [ReservationStatus.SEATED, ReservationStatus.COMPLETED, ReservationStatus.CANCELLED, ReservationStatus.NO_SHOW] } },
+        { reservationDate: { lt: todayStart } },
+      ];
+      orderBy = [{ reservationDate: 'desc' }, { reservationTime: 'desc' }];
+    }
+
+    const page = query.page || 1;
+    const limit = query.limit || 10;
+    const skip = (page - 1) * limit;
+
+    const [items, totalItems] = await Promise.all([
+      this.prisma.reservation.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy,
+        include: {
+          branch: { select: { id: true, name: true, phone: true, streetAddress: true } },
+          tableType: true,
+          table: true,
+          orders: { include: { menuItem: true } },
+        },
+      }),
+      this.prisma.reservation.count({ where }),
+    ]);
+
+    const enrichedItems = items.map((r) => {
+      const qrCheckInPayload = JSON.stringify({
+        code: r.reservationCode,
+        branchId: r.branchId,
+        date: r.reservationDate.toISOString().split('T')[0],
+        time: r.reservationTime,
+        phone: r.customerPhone,
+        name: r.customerName,
+      });
+
+      const canCancel =
+        (r.status === ReservationStatus.PENDING || r.status === ReservationStatus.CONFIRMED) &&
+        r.reservationDate >= todayStart;
+
+      return {
+        ...r,
+        qrCheckInPayload,
+        canCancel,
+      };
+    });
+
+    return {
+      items: enrichedItems,
       meta: new PaginationMetaDto(page, limit, totalItems),
     };
   }
