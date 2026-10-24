@@ -15,6 +15,7 @@ import { ReservationsService } from '../services/reservations.service';
 import { CreateReservationDto } from '../dto/create-reservation.dto';
 import { QueryAvailableSlotsDto } from '../dto/query-available-slots.dto';
 import { QueryReservationDto } from '../dto/query-reservation.dto';
+import { QueryMyReservationsDto } from '../dto/query-my-reservations.dto';
 import { UpdatePreOrdersDto } from '../dto/update-preorders.dto';
 import { ResponseMessage } from 'src/core/common/decorators/response-message.decorator';
 import { Public } from 'src/core/common/decorators/public.decorator';
@@ -44,6 +45,17 @@ export class ReservationsController {
   @ResponseMessage('Lấy danh sách khung giờ phục vụ thành công.')
   async getAvailableSlots(@Query() query: QueryAvailableSlotsDto) {
     return this.reservationsService.getAvailableSlots(query);
+  }
+
+  @Get('my-history')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Lấy lịch sử đặt bàn của bạn thành công.')
+  async getMyReservations(
+    @Query() query: QueryMyReservationsDto,
+    @CurrentUser() user: ICurrentUser,
+  ) {
+    return this.reservationsService.getMyReservations(query, user);
   }
 
   @Get()
