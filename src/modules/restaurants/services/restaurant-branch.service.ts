@@ -12,6 +12,7 @@ import { UpdateBranchOperatingHoursDto } from '../dto/branch-operating-hours.dto
 import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
 import { RestaurantBranch, RestaurantBranchStatus, Prisma, Role } from '@prisma/client';
 import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
+import { enrichBranchWithStatus } from '../helpers/branch-calculator.helper';
 
 @Injectable()
 export class RestaurantBranchService {
@@ -23,12 +24,15 @@ export class RestaurantBranchService {
     }
   }
 
-  async getRestaurantBranch(id: string): Promise<RestaurantBranch> {
+  async getRestaurantBranch(id: string) {
     const restaurantBranch = await this.prismaService.restaurantBranch.findUnique({
       where: { id },
       include: {
         province: true,
         ward: true,
+        operatingHours: {
+          orderBy: { dayOfWeek: 'asc' },
+        },
       },
     });
 
@@ -36,7 +40,7 @@ export class RestaurantBranchService {
       throw new NotFoundException('Restaurant branch not found');
     }
 
-    return restaurantBranch;
+    return enrichBranchWithStatus(restaurantBranch);
   }
 
   async getRestaurantBranches(query?: QueryRestaurantBranchDto) {
@@ -44,6 +48,14 @@ export class RestaurantBranchService {
 
     if (query?.status) {
       where.status = query.status;
+    }
+
+    if (query?.provinceCode) {
+      where.provinceCode = query.provinceCode;
+    }
+
+    if (query?.wardCode) {
+      where.wardCode = query.wardCode;
     }
 
     if (query?.search && query.search.trim()) {
@@ -55,15 +67,71 @@ export class RestaurantBranchService {
       ];
     }
 
-    if (!query || (!query.page && !query.limit && !query.search && !query.status)) {
-      return this.prismaService.restaurantBranch.findMany({
+    const hasDynamicFilterOrSort =
+      query?.isOpenNow !== undefined ||
+      (query?.lat !== undefined && query?.lng !== undefined);
+
+    if (hasDynamicFilterOrSort) {
+      const allBranches = await this.prismaService.restaurantBranch.findMany({
         where,
         orderBy: { name: 'asc' },
         include: {
           province: true,
           ward: true,
+          operatingHours: {
+            orderBy: { dayOfWeek: 'asc' },
+          },
         },
       });
+
+      let enriched = allBranches.map((b) =>
+        enrichBranchWithStatus(b, query?.lat, query?.lng),
+      );
+
+      if (query?.isOpenNow !== undefined) {
+        enriched = enriched.filter((b) => b.isOpenNow === query.isOpenNow);
+      }
+
+      if (query?.lat !== undefined && query?.lng !== undefined) {
+        enriched.sort((a, b) => (a.distanceKm ?? 999999) - (b.distanceKm ?? 999999));
+      }
+
+      if (!query?.page && !query?.limit) {
+        return enriched;
+      }
+
+      const page = query?.page || 1;
+      const limit = query?.limit || 10;
+      const totalItems = enriched.length;
+      const items = enriched.slice((page - 1) * limit, page * limit);
+
+      return {
+        items,
+        meta: new PaginationMetaDto(page, limit, totalItems),
+      };
+    }
+
+    if (
+      !query ||
+      (!query.page &&
+        !query.limit &&
+        !query.search &&
+        !query.status &&
+        !query.provinceCode &&
+        !query.wardCode)
+    ) {
+      const branches = await this.prismaService.restaurantBranch.findMany({
+        where,
+        orderBy: { name: 'asc' },
+        include: {
+          province: true,
+          ward: true,
+          operatingHours: {
+            orderBy: { dayOfWeek: 'asc' },
+          },
+        },
+      });
+      return branches.map((b) => enrichBranchWithStatus(b));
     }
 
     const page = query.page || 1;
@@ -79,13 +147,16 @@ export class RestaurantBranchService {
         include: {
           province: true,
           ward: true,
+          operatingHours: {
+            orderBy: { dayOfWeek: 'asc' },
+          },
         },
       }),
       this.prismaService.restaurantBranch.count({ where }),
     ]);
 
     return {
-      items,
+      items: items.map((b) => enrichBranchWithStatus(b)),
       meta: new PaginationMetaDto(page, limit, totalItems),
     };
   }
