@@ -184,7 +184,7 @@ export class TablesService {
       tableNumber,
       floor: dto.floor,
       status: dto.status,
-      note: dto.note,
+      note: dto.note && dto.note.trim() ? dto.note.trim() : null,
       branchId: dto.branchId,
       tableTypeId: dto.tableTypeId,
     }));
