@@ -1,10 +1,3 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
-import { TableLockService } from '../services/table-lock.service';
-import { SearchAvailableTablesDto } from '../dto/search-available-tables.dto';
-import { Public } from 'src/core/common/decorators/public.decorator';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { AuthJwtService } from 'src/core/security/jwt/auth-jwt.service';
-import type { Request } from 'express';
 import {
   Body,
   Controller,
@@ -14,8 +7,15 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { TableLockService } from '../services/table-lock.service';
+import { SearchAvailableTablesDto } from '../dto/search-available-tables.dto';
+import { Public } from 'src/core/common/decorators/public.decorator';
+import { AuthJwtService } from 'src/core/security/jwt/auth-jwt.service';
+import type { Request } from 'express';
 import { TablesService } from '../services/tables.service';
 import { CreateTableTypeDto } from '../dto/table-type.dto';
 import { CreateRestaurantTableDto } from '../dto/restaurant-table.dto';
@@ -135,6 +135,8 @@ export class TablesController {
   ) {
     const currentUserId = this.extractUserId(req);
     return this.tableLockService.searchAvailableTables(dto, currentUserId);
+  }
+
   @Get('branch/:branchId/turnover')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.STAFF, Role.ADMIN)

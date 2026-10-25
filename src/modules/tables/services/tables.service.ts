@@ -179,9 +179,10 @@ export class TablesService {
     const tablesToCreate = tableNumbers.map((tableNumber) => ({
       tableNumber,
       floor: dto.floor,
+status: dto.status,
+      note: dto.note && dto.note.trim() ? dto.note.trim() : null,
       branchId: dto.branchId,
       tableTypeId: dto.tableTypeId,
-      note: dto.note,
     }));
 
     return this.prisma.restaurantTable.createMany({
