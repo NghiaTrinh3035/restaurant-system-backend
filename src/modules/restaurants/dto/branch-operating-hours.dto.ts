@@ -14,16 +14,6 @@ import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class DailyOperatingHourDto {
-  @ApiPropertyOptional({ description: 'ID cấu hình ngày nếu có' })
-  @IsOptional()
-  @IsString()
-  id?: string;
-
-  @ApiPropertyOptional({ description: 'Branch ID nếu có' })
-  @IsOptional()
-  @IsString()
-  branchId?: string;
-
   @ApiProperty({ description: 'Ngày trong tuần (0: Chủ Nhật, 1: Thứ Hai, ..., 6: Thứ Bảy)', example: 1 })
   @IsInt()
   @Min(0)
@@ -49,18 +39,10 @@ export class DailyOperatingHourDto {
   @ApiProperty({ description: 'Trạng thái mở cửa hay nghỉ trong ngày này', example: true })
   @IsBoolean()
   isOpen: boolean;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  createdAt?: any;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  updatedAt?: any;
 }
 
 export class UpdateBranchOperatingHoursDto {
-  @ApiPropertyOptional({ description: 'Giờ mở cửa mặc định của cơ sở (HH:mm)', example: '08:00' })
+  @ApiPropertyOptional({ description: 'Giờ mở cửa mặc định (HH:mm)', example: '08:00' })
   @IsOptional()
   @IsString()
   @Matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, {
@@ -68,7 +50,7 @@ export class UpdateBranchOperatingHoursDto {
   })
   openingTime?: string;
 
-  @ApiPropertyOptional({ description: 'Giờ đóng cửa mặc định của cơ sở (HH:mm)', example: '22:00' })
+  @ApiPropertyOptional({ description: 'Giờ đóng cửa mặc định (HH:mm)', example: '22:00' })
   @IsOptional()
   @IsString()
   @Matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, {
@@ -76,7 +58,7 @@ export class UpdateBranchOperatingHoursDto {
   })
   closingTime?: string;
 
-  @ApiPropertyOptional({ description: 'Thời lượng slot dùng bữa tiêu chuẩn tính bằng phút', example: 90 })
+  @ApiPropertyOptional({ description: 'Thời lượng slot dùng bữa tính bằng phút', example: 90 })
   @IsOptional()
   @IsInt()
   @Min(30, { message: 'Thời lượng mỗi slot dùng bữa tối thiểu 30 phút' })

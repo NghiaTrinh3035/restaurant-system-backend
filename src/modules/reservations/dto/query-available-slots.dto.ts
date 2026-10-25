@@ -1,20 +1,22 @@
-import { IsNotEmpty, IsOptional, IsString, IsUUID } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsString, IsNotEmpty, IsUUID, Matches, IsOptional, IsInt, Min } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 
 export class QueryAvailableSlotsDto {
-  @ApiProperty({ description: 'ID chi nhánh' })
+  @ApiProperty({ description: 'ID chi nhánh cần tra cứu' })
   @IsUUID()
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'Vui lòng chọn chi nhánh.' })
   branchId: string;
 
-  @ApiProperty({ description: 'Ngày đặt bàn (YYYY-MM-DD)' })
+  @ApiProperty({ description: 'Ngày muốn đặt bàn (YYYY-MM-DD)', example: '2026-10-30' })
   @IsString()
-  @IsNotEmpty()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'Ngày phải theo định dạng YYYY-MM-DD.' })
   date: string;
 
-  @ApiPropertyOptional({ description: 'Số lượng khách' })
+  @ApiPropertyOptional({ description: 'Số lượng khách dự kiến', default: 2 })
   @IsOptional()
   @Type(() => Number)
+  @IsInt()
+  @Min(1)
   guestCount?: number;
 }
