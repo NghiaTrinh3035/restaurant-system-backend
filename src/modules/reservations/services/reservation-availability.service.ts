@@ -84,7 +84,12 @@ export class ReservationAvailabilityService {
   /**
    * Kiểm tra ngày/giờ khách chọn có hợp lệ để đặt bàn hay không (ném lỗi nếu không hợp lệ).
    */
-  validateBookingTime(branch: BranchContext, dateStr: string, time: string): ServiceWindow {
+  validateBookingTime(
+    branch: BranchContext,
+    dateStr: string,
+    time: string,
+    durationMinutes?: number,
+  ): ServiceWindow {
     const now = getLocalNow();
     if (dateStr < now.date) {
       throw new BadRequestException('Không thể đặt bàn vào ngày trong quá khứ.');
@@ -98,12 +103,13 @@ export class ReservationAvailabilityService {
       throw new BadRequestException('Chi nhánh không mở cửa phục vụ vào ngày đã chọn.');
     }
 
+    const duration = durationMinutes && durationMinutes > 0 ? durationMinutes : window.slotDuration;
     const reqMins = timeStringToMinutes(time);
     const openMins = timeStringToMinutes(window.openTime);
     const closeMins = timeStringToMinutes(window.closeTime);
-    if (reqMins < openMins || reqMins + window.slotDuration > closeMins) {
+    if (reqMins < openMins || reqMins + duration > closeMins) {
       throw new BadRequestException(
-        `Giờ đặt bàn (${time}) nằm ngoài khung giờ nhận khách (${window.openTime} - ${window.closeTime}, cần ${window.slotDuration} phút phục vụ).`,
+        `Giờ đặt bàn (${time}) nằm ngoài khung giờ nhận khách (${window.openTime} - ${window.closeTime}, cần ${duration} phút phục vụ).`,
       );
     }
     if ((reqMins - openMins) % SLOT_STEP_MINUTES !== 0) {
@@ -115,7 +121,7 @@ export class ReservationAvailabilityService {
       );
     }
 
-    return window;
+    return { ...window, slotDuration: duration };
   }
 
   getActiveReservations(
@@ -182,12 +188,14 @@ export class ReservationAvailabilityService {
     const guestCount = query.guestCount || 2;
     const window = this.getServiceWindow(branch, query.date);
     const now = getLocalNow();
+    const duration = query.durationMinutes && query.durationMinutes > 0 ? query.durationMinutes : window.slotDuration;
 
     const baseResponse = {
       branchId: branch.id,
       branchName: branch.name,
       date: query.date,
       slotDurationMinutes: window.slotDuration,
+      durationMinutes: duration,
       openTime: window.openTime,
       closeTime: window.closeTime,
     };
@@ -214,7 +222,7 @@ export class ReservationAvailabilityService {
     const timeSlots = generateDailyTimeSlots(
       window.openTime,
       window.closeTime,
-      window.slotDuration,
+      duration,
       SLOT_STEP_MINUTES,
     ).filter((time) => timeStringToMinutes(time) >= minStartMins);
 
@@ -226,7 +234,7 @@ export class ReservationAvailabilityService {
         reservations,
         guestCount,
         timeStringToMinutes(time),
-        window.slotDuration,
+        duration,
       );
       return { time, isAvailable: remaining > 0, remainingTables: remaining };
     });

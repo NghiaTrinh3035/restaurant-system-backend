@@ -63,7 +63,7 @@ export class MenuItemsController {
 - Kiểm tra tính toàn vẹn dữ liệu và logic nghiệp vụ trước khi ghi dữ liệu.
 - Ném lỗi bằng các NestJS Built-in Exceptions (`BadRequestException`, `UnauthorizedException`, `ForbiddenException`, `NotFoundException`, `ConflictException`).
 - Sử dụng `this.prisma.$transaction(async (tx) => { ... })` cho các nghiệp vụ cập nhật nhiều bảng liên quan (như Tạo đặt bàn, Hủy đặt bàn hoàn cọc, Chuyển bàn).
-- Tách nhỏ service khi vượt quá 500 dòng thành các helper service hoặc domain services con.
+- Tách nhỏ service khi vượt quá 1000 dòng thành các helper service hoặc domain services con.
 
 ### DON'T (Tuyệt đối KHÔNG):
 - **KHÔNG** truy cập trực tiếp các đối tượng HTTP request/response của Express (`req`, `res`) trong Service. Hãy truyền thuần túy DTO, ID, User Object từ Controller xuống.

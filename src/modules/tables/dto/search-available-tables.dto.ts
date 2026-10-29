@@ -32,6 +32,16 @@ export class SearchAvailableTablesDto {
   time: string;
 
   @ApiPropertyOptional({
+    description: 'Thời lượng dùng bữa tính theo phút (mặc định theo slot của chi nhánh)',
+    example: 90,
+  })
+  @Type(() => Number)
+  @IsInt()
+  @Min(30)
+  @IsOptional()
+  durationMinutes?: number;
+
+  @ApiPropertyOptional({
     description: 'Bao gồm cả các bàn đang bị khóa tạm thời (mặc định: false - chỉ lấy bàn còn trống hoàn toàn)',
     default: false,
   })

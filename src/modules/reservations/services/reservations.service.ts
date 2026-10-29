@@ -39,7 +39,12 @@ export class ReservationsService {
 
   async createReservation(dto: CreateReservationDto, user?: ICurrentUser) {
     const branch = await this.availability.getBranchContext(dto.branchId);
-    const window = this.availability.validateBookingTime(branch, dto.reservationDate, dto.reservationTime);
+    const window = this.availability.validateBookingTime(
+      branch,
+      dto.reservationDate,
+      dto.reservationTime,
+      dto.durationMinutes,
+    );
     const reqMins = timeStringToMinutes(dto.reservationTime);
     const capacities = branch.tables.map((t) => t.tableType.capacity);
 

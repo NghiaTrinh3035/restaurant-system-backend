@@ -12,9 +12,9 @@ Tài liệu kiến trúc chi tiết (Source of Truth): `backend_architecture/`
 >    - Tuyệt đối không hardcode giá trị mặc định/fallback trong mã nguồn cho bất kỳ biến môi trường nào (`DATABASE_URL`, `REDIS_HOST`, `REDIS_PORT`, `JWT_SECRET`, `JWT_ACCESS_EXPIRATION`, `PORT`,...).
 >    - Bắt buộc nạp cấu hình qua `ConfigService` của NestJS. Nếu thiếu biến môi trường, hệ thống phải dừng lại và báo lỗi ngay (fail-fast).
 > 
-> 2. **Giới hạn độ dài file (Tối đa 500 dòng)**:
->    - Tuyệt đối không viết hoặc để bất kỳ file code nào vượt quá **500 dòng**.
->    - Nếu module/service tiệm cận 500 dòng, bắt buộc phải chủ động tách nhỏ thành các service con, helper, custom repository hoặc file DTO riêng biệt trước khi thêm logic mới.
+> 2. **Giới hạn độ dài file (Tối đa 1000 dòng)**:
+>    - Tuyệt đối không viết hoặc để bất kỳ file code nào vượt quá **1000 dòng**.
+>    - Nếu module/service tiệm cận 1000 dòng, bắt buộc phải chủ động tách nhỏ thành các service con, helper, custom repository hoặc file DTO riêng biệt trước khi thêm logic mới.
 > 
 > 3. **Chuẩn RESTful API & Response Payload**:
 >    - Tất cả response trả về từ Controller phải đi qua `TransformInterceptor` theo định dạng chuẩn:

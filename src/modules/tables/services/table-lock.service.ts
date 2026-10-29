@@ -60,7 +60,7 @@ export class TableLockService {
       throw new NotFoundException('Chi nhánh không tồn tại hoặc đã ngừng hoạt động.');
     }
 
-    const duration = branch.slotDurationMinutes || 90;
+    const duration = dto.durationMinutes && dto.durationMinutes > 0 ? dto.durationMinutes : (branch.slotDurationMinutes || 90);
     const startMins = timeStringToMinutes(dto.time);
 
     const tables = await this.prisma.restaurantTable.findMany({
