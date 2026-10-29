@@ -19,4 +19,11 @@ export class QueryAvailableSlotsDto {
   @IsInt()
   @Min(1)
   guestCount?: number;
+
+  @ApiPropertyOptional({ description: 'Thời lượng dùng bữa tính theo phút (mặc định theo slot của chi nhánh)', example: 90 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(30)
+  durationMinutes?: number;
 }

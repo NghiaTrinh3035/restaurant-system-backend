@@ -14,7 +14,7 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     super();
   }
 
-  canActivate(context: ExecutionContext) {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const isPublic = this.reflector.getAllAndOverride(
       IS_PUBLIC_KEY,
       [
@@ -24,9 +24,15 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     );
 
     if (isPublic) {
+      // Route công khai: vẫn nạp user nếu có token hợp lệ để @CurrentUser() dùng được (khách vãng lai thì bỏ qua)
+      try {
+        await super.canActivate(context);
+      } catch {
+        // Không có token / token hết hạn -> tiếp tục như khách
+      }
       return true;
     }
 
-    return super.canActivate(context);
+    return super.canActivate(context) as Promise<boolean>;
   }
 }

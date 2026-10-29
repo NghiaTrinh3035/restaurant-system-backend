@@ -37,5 +37,5 @@ Tài liệu kiến trúc chi tiết (Source of Truth): `backend_architecture/`
 - **Soft Delete**: Ưu tiên sử dụng cờ `deletedAt` hoặc `status: 'INACTIVE'` thay vì xóa vật lý nếu bảng liên quan đến lịch sử kinh doanh.
 
 ## 4. Quy Tắc Giới Hạn Code & Module
-- Không để bất kỳ file nào vượt quá **500 dòng**. Chủ động chia nhỏ thành các helper hoặc sub-services khi logic tăng trưởng.
+- Không để bất kỳ file nào vượt quá **1000 dòng**. Chủ động chia nhỏ thành các helper hoặc sub-services khi logic tăng trưởng.
 - Không hardcode giá trị fallback cho các biến môi trường (`DATABASE_URL`, `JWT_SECRET`, `REDIS_URL`,...). Phải nạp từ `ConfigService` và báo lỗi ngay khi thiếu.

@@ -69,6 +69,18 @@ export class CreateReservationDto {
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'Giờ đặt bàn phải có định dạng HH:mm.' })
   reservationTime: string;
 
+  @ApiPropertyOptional({ description: 'Thời lượng dùng bữa tính theo phút (mặc định theo slot của chi nhánh)', example: 90 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt({ message: 'Thời lượng dùng bữa phải là số nguyên.' })
+  @Min(30, { message: 'Thời lượng dùng bữa tối thiểu 30 phút.' })
+  durationMinutes?: number;
+
+  @ApiPropertyOptional({ description: 'ID bàn cụ thể đã giữ trên sơ đồ (yêu cầu đăng nhập)' })
+  @IsUUID()
+  @IsOptional()
+  tableId?: string;
+
   @ApiPropertyOptional({ description: 'ID loại bàn mong muốn' })
   @IsUUID()
   @IsOptional()

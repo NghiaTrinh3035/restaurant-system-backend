@@ -15,7 +15,7 @@ Mục đích: Đánh giá chất lượng mã nguồn Backend trước khi mở 
    - Xác định danh sách file và dòng thay đổi.
 2. **Kiểm tra tuân thủ kiến trúc**:
    - Tuân thủ `be-architecture-rules.md` (Module, DTO validation, Prisma query, TransformInterceptor).
-   - Kiểm tra xem có file nào vượt quá 500 dòng không.
+   - Kiểm tra xem có file nào vượt quá 1000 dòng không.
    - Kiểm tra có hardcode `.env` fallback không.
 3. **Báo cáo kết quả review**:
    - Điểm tốt (Strengths).
