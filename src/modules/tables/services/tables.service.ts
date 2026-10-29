@@ -3,8 +3,18 @@ import {
   NotFoundException,
   ConflictException,
   ForbiddenException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { REDIS_CLIENT } from 'src/redis/redis.module';
+import Redis from 'ioredis';
+import { TablesGateway } from 'src/gateway/tables.gateway';
+import {
+  getLocalNow,
+  timeStringToMinutes,
+  toDateOnly,
+} from 'src/modules/reservations/helpers/reservation.helper';
 import { CreateRestaurantTableDto } from '../dto/restaurant-table.dto';
 import { CreateTableTypeDto } from '../dto/table-type.dto';
 import { UpdateRestaurantTableDto } from '../dto/update-restaurant-table.dto';
@@ -13,13 +23,18 @@ import { BulkCreateRestaurantTableDto } from '../dto/bulk-create-restaurant-tabl
 import { QueryTableTypeDto } from '../dto/query-table-type.dto';
 import { QueryRestaurantTableDto } from '../dto/query-restaurant-table.dto';
 import { UpdateTableStatusDto } from '../dto/update-table-status.dto';
-import { Prisma, RestaurantTableStatus, Role } from '@prisma/client';
+import { Prisma, ReservationStatus, RestaurantTableStatus, Role } from '@prisma/client';
 import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
 import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
 
 @Injectable()
 export class TablesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(REDIS_CLIENT) private readonly redisClient: Redis,
+    @Inject(forwardRef(() => TablesGateway))
+    private readonly tablesGateway: TablesGateway,
+  ) {}
 
   // ==========================================
   // TABLE TYPE
@@ -363,7 +378,7 @@ status: dto.status,
       dataToUpdate.note = dto.note;
     }
 
-    return this.prisma.restaurantTable.update({
+    const updated = await this.prisma.restaurantTable.update({
       where: { id },
       data: dataToUpdate,
       include: {
@@ -371,6 +386,24 @@ status: dto.status,
         branch: { select: { id: true, name: true } },
       },
     });
+
+    let dirtySince: number | null = null;
+    if (dto.status === RestaurantTableStatus.DIRTY) {
+      dirtySince = Date.now();
+      await this.redisClient.hset(`table:dirty-times:${table.branchId}`, table.id, dirtySince.toString());
+    } else {
+      await this.redisClient.hdel(`table:dirty-times:${table.branchId}`, table.id);
+    }
+
+    const result = { ...updated, dirtySince };
+
+    try {
+      this.tablesGateway?.notifyTableStatusChanged(table.branchId, result);
+    } catch {
+      // Bỏ qua lỗi phát sóng socket nếu có
+    }
+
+    return result;
   }
 
   async getTableTurnoverStats(branchId: string, user?: ICurrentUser) {
@@ -380,23 +413,59 @@ status: dto.status,
       }
     }
 
-    const tables = await this.prisma.restaurantTable.findMany({
-      where: {
-        branchId,
-        isActive: true,
-      },
-      orderBy: [{ floor: 'asc' }, { tableNumber: 'asc' }],
-      include: {
-        tableType: true,
-      },
-    });
+    const now = getLocalNow();
+    const [tables, dirtyTimes, todayReservations] = await Promise.all([
+      this.prisma.restaurantTable.findMany({
+        where: {
+          branchId,
+          isActive: true,
+        },
+        orderBy: [{ floor: 'asc' }, { tableNumber: 'asc' }],
+        include: {
+          tableType: true,
+        },
+      }),
+      this.redisClient.hgetall(`table:dirty-times:${branchId}`),
+      this.prisma.reservation.findMany({
+        where: {
+          branchId,
+          reservationDate: toDateOnly(now.date),
+          status: { in: [ReservationStatus.PENDING, ReservationStatus.CONFIRMED] },
+          tableId: { not: null },
+        },
+        select: {
+          tableId: true,
+          reservationTime: true,
+          customerName: true,
+          guestCount: true,
+        },
+        orderBy: { reservationTime: 'asc' },
+      }),
+    ]);
+
+    // Map lượt đặt bàn tiếp theo trong ngày cho từng bàn
+    const nextReservationMap = new Map<
+      string,
+      { reservationTime: string; customerName: string; guestCount: number }
+    >();
+    for (const res of todayReservations) {
+      if (!res.tableId) continue;
+      const resMins = timeStringToMinutes(res.reservationTime);
+      if (resMins >= now.minutes && !nextReservationMap.has(res.tableId)) {
+        nextReservationMap.set(res.tableId, {
+          reservationTime: res.reservationTime,
+          customerName: res.customerName,
+          guestCount: res.guestCount,
+        });
+      }
+    }
 
     let available = 0;
     let occupied = 0;
     let dirty = 0;
     let maintenance = 0;
 
-    const floorMap = new Map<number, typeof tables>();
+    const floorMap = new Map<number, any[]>();
 
     for (const t of tables) {
       if (t.status === RestaurantTableStatus.AVAILABLE) available++;
@@ -404,8 +473,22 @@ status: dto.status,
       else if (t.status === RestaurantTableStatus.DIRTY) dirty++;
       else if (t.status === RestaurantTableStatus.MAINTENANCE) maintenance++;
 
+      const dirtyTimestampStr = dirtyTimes[t.id];
+      const dirtySince =
+        t.status === RestaurantTableStatus.DIRTY
+          ? dirtyTimestampStr
+            ? Number(dirtyTimestampStr)
+            : Date.now()
+          : null;
+
+      const tableWithMeta = {
+        ...t,
+        dirtySince,
+        nextReservation: nextReservationMap.get(t.id) || null,
+      };
+
       const list = floorMap.get(t.floor) || [];
-      list.push(t);
+      list.push(tableWithMeta);
       floorMap.set(t.floor, list);
     }
 

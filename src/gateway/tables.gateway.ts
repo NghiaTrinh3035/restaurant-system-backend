@@ -8,7 +8,7 @@ import {
   ConnectedSocket,
   MessageBody,
 } from '@nestjs/websockets';
-import { Logger } from '@nestjs/common';
+import { Logger, Inject, forwardRef } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { TableLockService } from 'src/modules/tables/services/table-lock.service';
 import { AuthJwtService } from 'src/core/security/jwt/auth-jwt.service';
@@ -32,6 +32,7 @@ export class TablesGateway
   server: Server;
 
   constructor(
+    @Inject(forwardRef(() => TableLockService))
     private readonly tableLockService: TableLockService,
     private readonly authJwtService: AuthJwtService,
     private readonly prisma: PrismaService,
