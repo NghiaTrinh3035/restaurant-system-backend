@@ -83,13 +83,13 @@ export class ReservationsController {
   }
 
   @Patch(':id/cancel')
-  @Public()
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   @ResponseMessage('Hủy đặt bàn thành công.')
   async cancelReservation(
     @Param('id') id: string,
+    @CurrentUser() user: ICurrentUser,
     @Body('reason') reason?: string,
-    @CurrentUser() user?: ICurrentUser,
   ) {
     return this.reservationsService.cancelReservation(id, reason, user);
   }

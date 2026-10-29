@@ -36,6 +36,7 @@ Tài liệu kiến trúc chi tiết (Source of Truth): `backend_architecture/`
 >    - Bắt buộc xóa sạch toàn bộ file test tạm, file rác, file `.log`, dữ liệu seed thử nghiệm trước khi tạo commit.
 > 
 > 6. **Quy tắc Git & Pull Request (Target: `dev`)**:
+>    - **TUYỆT ĐỐI CẤM TỰ Ý COMMIT VÀ PUSH:** Agent không được tự ý chạy `git commit` hoặc `git push` nếu người dùng chưa ra lệnh hoặc chưa xác nhận rõ ràng. Mọi thay đổi phải để ở dạng chưa commit (unstaged / modified) để người dùng review.
 >    - Nhánh phát triển chính của Backend là **`dev`**.
 >    - Mọi nhánh mới phải checkout từ `dev`: `feature/<tên-tính-năng>` hoặc `fix/<tên-lỗi>`.
 >    - Commit message phải tuân thủ Conventional Commits (`feat: ...`, `fix: ...`, `refactor: ...`, `chore: ...`).

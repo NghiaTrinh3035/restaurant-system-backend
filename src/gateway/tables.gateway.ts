@@ -13,6 +13,8 @@ import { Server, Socket } from 'socket.io';
 import { TableLockService } from 'src/modules/tables/services/table-lock.service';
 import { AuthJwtService } from 'src/core/security/jwt/auth-jwt.service';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { validate } from 'class-validator';
+import { plainToInstance } from 'class-transformer';
 import { BranchJoinDto, TableLockDto } from './dto/table-lock.dto';
 
 @WebSocketGateway({
@@ -86,6 +88,18 @@ export class TablesGateway
       return headerAuth.startsWith('Bearer ') ? headerAuth.slice(7) : headerAuth;
     }
 
+    // Đăng nhập lưu accessToken trong httpOnly cookie (giống JwtStrategy cho REST)
+    const cookieHeader = client.handshake?.headers?.cookie;
+    if (cookieHeader && typeof cookieHeader === 'string') {
+      const accessCookie = cookieHeader
+        .split(';')
+        .map((part) => part.trim())
+        .find((part) => part.startsWith('accessToken='));
+      if (accessCookie) {
+        return decodeURIComponent(accessCookie.slice('accessToken='.length));
+      }
+    }
+
     return null;
   }
 
@@ -134,32 +148,44 @@ export class TablesGateway
   }
 
   /**
-   * Giữ bàn tạm thời (Table Lock) - Khách hàng chọn bàn trong lúc đặt chỗ
+   * Giữ bàn tạm thời (Table Lock) cho một khung giờ - Khách hàng chọn bàn trong lúc đặt chỗ
    */
   @SubscribeMessage('table:lock')
   async handleTableLock(
     @ConnectedSocket() client: Socket,
     @MessageBody() dto: TableLockDto,
   ) {
-    // 1. Kiểm tra xác thực người dùng
+    // 1. Kiểm tra xác thực người dùng & dữ liệu đầu vào
     if (!client.data?.user) {
       client.emit('table:lock_failed', {
-        tableId: dto.tableId,
-        branchId: dto.branchId,
+        tableId: dto?.tableId,
+        branchId: dto?.branchId,
         reason: 'Vui lòng đăng nhập tài khoản để thực hiện giữ bàn.',
       });
       return;
     }
 
+    const invalidReason = await this.validateLockDto(dto);
+    if (invalidReason) {
+      client.emit('table:lock_failed', { tableId: dto?.tableId, branchId: dto?.branchId, reason: invalidReason });
+      return;
+    }
+
     const user = client.data.user;
 
-    // 2. Gọi service thực hiện atomic Redis lock (mặc định 600s = 10 phút)
+    // 2. Gọi service thực hiện atomic Redis lock theo khung giờ (mặc định 600s = 10 phút)
     const result = await this.tableLockService.lockTable(
-      dto.branchId,
-      dto.tableId,
+      dto,
       { id: user.id, email: user.email },
       600,
     );
+
+    const room = `branch:${dto.branchId}`;
+
+    // Bàn cũ của người dùng (nếu có) đã được nhả để giữ bàn mới
+    if (result.releasedLock) {
+      this.server.to(room).emit('table:released', result.releasedLock);
+    }
 
     if (!result.success) {
       client.emit('table:lock_failed', {
@@ -169,8 +195,6 @@ export class TablesGateway
       });
       return;
     }
-
-    const room = `branch:${dto.branchId}`;
 
     // 3. Broadcast sự kiện tới toàn bộ người dùng trong phòng chi nhánh
     this.server.to(room).emit('table:locked', result.lockInfo);
@@ -179,12 +203,12 @@ export class TablesGateway
     client.emit('table:lock_success', result.lockInfo);
 
     this.logger.log(
-      `Table ${dto.tableId} in branch ${dto.branchId} locked by user ${user.email}`,
+      `Table ${dto.tableId} (${dto.date} ${dto.time}) in branch ${dto.branchId} locked by user ${user.email}`,
     );
   }
 
   /**
-   * Hủy giữ bàn (Table Release) - Khách hàng đổi ý hoặc hoàn tất đặt bàn
+   * Hủy giữ bàn (Table Release) - Khách hàng đổi ý hoặc đổi khung giờ
    */
   @SubscribeMessage('table:release')
   async handleTableRelease(
@@ -193,20 +217,22 @@ export class TablesGateway
   ) {
     if (!client.data?.user) {
       client.emit('table:release_failed', {
-        tableId: dto.tableId,
-        branchId: dto.branchId,
+        tableId: dto?.tableId,
+        branchId: dto?.branchId,
         reason: 'Vui lòng đăng nhập tài khoản để thực hiện mở khóa bàn.',
       });
       return;
     }
 
+    const invalidReason = await this.validateLockDto(dto);
+    if (invalidReason) {
+      client.emit('table:release_failed', { tableId: dto?.tableId, branchId: dto?.branchId, reason: invalidReason });
+      return;
+    }
+
     const user = client.data.user;
 
-    const result = await this.tableLockService.releaseTable(
-      dto.branchId,
-      dto.tableId,
-      { id: user.id, role: user.role },
-    );
+    const result = await this.tableLockService.releaseTable(dto, { id: user.id, role: user.role });
 
     if (!result.success) {
       client.emit('table:release_failed', {
@@ -218,21 +244,31 @@ export class TablesGateway
     }
 
     const room = `branch:${dto.branchId}`;
+    const payload = { tableId: dto.tableId, branchId: dto.branchId, date: dto.date, time: dto.time };
 
     // Broadcast cho toàn phòng chi nhánh biết bàn đã được thả
-    this.server.to(room).emit('table:released', {
-      tableId: dto.tableId,
-      branchId: dto.branchId,
-    });
-
-    client.emit('table:release_success', {
-      tableId: dto.tableId,
-      branchId: dto.branchId,
-    });
+    this.server.to(room).emit('table:released', payload);
+    client.emit('table:release_success', payload);
 
     this.logger.log(
-      `Table ${dto.tableId} in branch ${dto.branchId} released by user ${user.email}`,
+      `Table ${dto.tableId} (${dto.date} ${dto.time}) in branch ${dto.branchId} released by user ${user.email}`,
     );
+  }
+
+  /**
+   * Phát sự kiện bàn đã được đặt thành công (khóa tạm chuyển thành đơn đặt bàn)
+   */
+  notifyTableReserved(payload: { branchId: string; tableId: string; date: string; time: string }) {
+    const room = `branch:${payload.branchId}`;
+    this.server.to(room).emit('table:released', payload);
+    this.server.to(room).emit('table:reserved', payload);
+  }
+
+  // WebSocket không đi qua ValidationPipe toàn cục nên validate thủ công
+  private async validateLockDto(dto: TableLockDto): Promise<string | null> {
+    const errors = await validate(plainToInstance(TableLockDto, dto ?? {}));
+    if (errors.length === 0) return null;
+    return Object.values(errors[0].constraints ?? {})[0] ?? 'Dữ liệu giữ bàn không hợp lệ.';
   }
 
   /**

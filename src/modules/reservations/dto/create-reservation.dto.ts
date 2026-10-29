@@ -69,6 +69,11 @@ export class CreateReservationDto {
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'Giờ đặt bàn phải có định dạng HH:mm.' })
   reservationTime: string;
 
+  @ApiPropertyOptional({ description: 'ID bàn cụ thể đã giữ trên sơ đồ (yêu cầu đăng nhập)' })
+  @IsUUID()
+  @IsOptional()
+  tableId?: string;
+
   @ApiPropertyOptional({ description: 'ID loại bàn mong muốn' })
   @IsUUID()
   @IsOptional()
