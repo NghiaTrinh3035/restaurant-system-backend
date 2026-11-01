@@ -25,6 +25,7 @@ import { BulkCreateRestaurantTableDto } from '../dto/bulk-create-restaurant-tabl
 import { QueryTableTypeDto } from '../dto/query-table-type.dto';
 import { QueryRestaurantTableDto } from '../dto/query-restaurant-table.dto';
 import { UpdateTableStatusDto } from '../dto/update-table-status.dto';
+import { BulkCleanTablesDto } from '../dto/bulk-clean-tables.dto';
 import { JwtAuthGuard } from 'src/core/common/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/core/common/guards/roles.guard';
 import { Roles } from 'src/core/common/decorators/roles.decorator';
@@ -146,6 +147,19 @@ export class TablesController {
     @CurrentUser() user: ICurrentUser,
   ) {
     return this.tablesService.getTableTurnoverStats(branchId, user);
+  }
+
+  @Patch('branch/:branchId/bulk-clean')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.STAFF, Role.ADMIN)
+  @ApiOperation({ summary: 'Dọn dẹp nhanh hàng loạt bàn đang dơ của chi nhánh' })
+  @ResponseMessage('Dọn dẹp bàn thành công')
+  bulkCleanTables(
+    @Param('branchId') branchId: string,
+    @Body() dto: BulkCleanTablesDto,
+    @CurrentUser() user: ICurrentUser,
+  ) {
+    return this.tablesService.bulkCleanTables(branchId, dto, user);
   }
 
   @Get('branch/:branchId')

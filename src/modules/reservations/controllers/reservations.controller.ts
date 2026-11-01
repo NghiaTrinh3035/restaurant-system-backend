@@ -23,6 +23,9 @@ import { Public } from 'src/core/common/decorators/public.decorator';
 import { CurrentUser } from 'src/core/common/decorators/current-user.decorator';
 import { JwtAuthGuard } from 'src/core/common/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/core/common/guards/roles.guard';
+import { Roles } from 'src/core/common/decorators/roles.decorator';
+import { Role } from '@prisma/client';
+import { UpdateReservationStatusDto } from '../dto/update-reservation-status.dto';
 import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
 
 @ApiTags('Reservations')
@@ -115,5 +118,30 @@ export class ReservationsController {
     @CurrentUser() user?: ICurrentUser,
   ) {
     return this.reservationsService.addOrUpdatePreOrders(id, dto.items, user);
+  }
+
+  @Patch(':id/status')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.STAFF, Role.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Cập nhật trạng thái đặt bàn thành công.')
+  async updateReservationStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateReservationStatusDto,
+    @CurrentUser() user: ICurrentUser,
+  ) {
+    return this.reservationsService.updateReservationStatus(id, dto, user);
+  }
+
+  @Post('check-in-qr')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.STAFF, Role.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Check-in khách vào bàn thành công.')
+  async checkInQr(
+    @Body('reservationCode') reservationCode: string,
+    @CurrentUser() user: ICurrentUser,
+  ) {
+    return this.reservationsService.checkInQr(reservationCode, user);
   }
 }

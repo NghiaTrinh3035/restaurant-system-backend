@@ -15,6 +15,7 @@ import { RedisModule } from './redis/redis.module';
 import { JwtAuthGuard } from './core/common/guards/jwt-auth.guard';
 import { AuthJwtModule } from './core/security/jwt/jwt.module';
 import { GatewayModule } from './gateway/gateway.module';
+import { PickupOrdersModule } from './modules/pickup-orders/pickup-orders.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { GatewayModule } from './gateway/gateway.module';
     TablesModule,
     AuthJwtModule,
     GatewayModule,
+    PickupOrdersModule,
   ],
   controllers: [],
   providers: [

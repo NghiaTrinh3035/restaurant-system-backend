@@ -23,6 +23,7 @@ model RestaurantBranch {
   branchMenuItems     BranchMenuItem[]
   operatingHours      BranchOperatingHours[]
   reservations        Reservation[]
+  pickupOrders        PickupOrder[]
 
   @@map("restaurant_branches")
 }

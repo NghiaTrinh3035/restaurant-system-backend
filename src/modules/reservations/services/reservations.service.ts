@@ -12,7 +12,9 @@ import { QueryAvailableSlotsDto } from '../dto/query-available-slots.dto';
 import { QueryReservationDto } from '../dto/query-reservation.dto';
 import { QueryMyReservationsDto, ReservationTimeline } from '../dto/query-my-reservations.dto';
 import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
-import { ReservationStatus, Prisma, Role } from '@prisma/client';
+import { ReservationStatus, RestaurantTableStatus, Prisma, Role } from '@prisma/client';
+import { TablesService } from 'src/modules/tables/services/tables.service';
+import { UpdateReservationStatusDto } from '../dto/update-reservation-status.dto';
 import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
 import { TableLockService } from 'src/modules/tables/services/table-lock.service';
 import { TablesGateway } from 'src/gateway/tables.gateway';
@@ -35,6 +37,7 @@ export class ReservationsService {
     private readonly availability: ReservationAvailabilityService,
     private readonly tableLockService: TableLockService,
     private readonly tablesGateway: TablesGateway,
+    private readonly tablesService: TablesService,
   ) {}
 
   async createReservation(dto: CreateReservationDto, user?: ICurrentUser) {
@@ -429,5 +432,74 @@ export class ReservationsService {
     });
 
     return this.getPreOrders(reservation.id, user);
+  }
+
+  async updateReservationStatus(
+    id: string,
+    dto: UpdateReservationStatusDto,
+    user: ICurrentUser,
+  ) {
+    const reservation = await this.getReservationById(id, user);
+
+    if (user.role === Role.STAFF && user.branchId && reservation.branchId !== user.branchId) {
+      throw new ForbiddenException('Bạn chỉ có quyền cập nhật đơn đặt bàn thuộc chi nhánh của mình.');
+    }
+
+    const updated = await this.prisma.reservation.update({
+      where: { id: reservation.id },
+      data: {
+        status: dto.status,
+        ...(dto.status === ReservationStatus.CANCELLED && dto.note
+          ? { cancelledReason: dto.note }
+          : {}),
+      },
+      include: {
+        branch: true,
+        table: true,
+        orders: { include: { menuItem: true } },
+      },
+    });
+
+    // Nếu chuyển sang SEATED và có bàn -> Tự động đổi bàn sang OCCUPIED
+    if (dto.status === ReservationStatus.SEATED && reservation.tableId) {
+      try {
+        await this.tablesService.updateTableStatus(
+          reservation.tableId,
+          { status: RestaurantTableStatus.OCCUPIED, note: `Khách ${reservation.customerName} đang dùng bữa` },
+          user,
+        );
+      } catch (err) {
+        // Tiếp tục dù lỗi socket
+      }
+    }
+
+    // Nếu chuyển sang COMPLETED và có bàn -> Tự động đổi bàn sang DIRTY để đưa vào hàng chờ dọn dẹp
+    if (dto.status === ReservationStatus.COMPLETED && reservation.tableId) {
+      try {
+        await this.tablesService.updateTableStatus(
+          reservation.tableId,
+          { status: RestaurantTableStatus.DIRTY, note: `Khách vừa dùng bữa xong (${reservation.reservationCode})` },
+          user,
+        );
+      } catch (err) {
+        // Tiếp tục dù lỗi socket
+      }
+    }
+
+    return updated;
+  }
+
+  async checkInQr(reservationCode: string, user: ICurrentUser) {
+    const reservation = await this.prisma.reservation.findUnique({
+      where: { reservationCode },
+    });
+    if (!reservation) {
+      throw new NotFoundException('Không tìm thấy thông tin đặt bàn với mã này.');
+    }
+    return this.updateReservationStatus(
+      reservation.id,
+      { status: ReservationStatus.SEATED, note: 'Khách đã quét mã QR check-in tại quầy' },
+      user,
+    );
   }
 }

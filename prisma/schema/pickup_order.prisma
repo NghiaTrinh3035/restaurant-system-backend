@@ -1,0 +1,53 @@
+model PickupOrder {
+  id              String            @id @default(uuid()) @db.Uuid
+  orderCode       String            @unique // VD: "PU-20261031-8921"
+  branchId        String            @db.Uuid
+  userId          String?           @db.Uuid
+  customerName    String
+  customerPhone   String
+  customerEmail   String?
+  pickupDate      DateTime          @db.Date
+  pickupTime      String            // Định dạng "HH:mm", vd: "11:30", "18:00"
+  totalAmount     Decimal           @db.Decimal(12, 2)
+  specialNotes    String?
+  status          PickupOrderStatus @default(PENDING)
+  cancelledReason String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  branch          RestaurantBranch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  user            User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  items           PickupOrderItem[]
+
+  @@index([branchId, pickupDate])
+  @@index([userId])
+  @@index([status])
+  @@map("pickup_orders")
+}
+
+model PickupOrderItem {
+  id            String      @id @default(uuid()) @db.Uuid
+  orderId       String      @db.Uuid
+  menuItemId    String      @db.Uuid
+  quantity      Int         @default(1)
+  unitPrice     Decimal     @db.Decimal(12, 2)
+  subtotal      Decimal     @db.Decimal(12, 2)
+  note          String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  order         PickupOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem      MenuItem    @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("pickup_order_items")
+}
+
+enum PickupOrderStatus {
+  PENDING       // Khách vừa đặt, chờ chi nhánh duyệt
+  CONFIRMED     // Chi nhánh đã tiếp nhận đơn
+  PREPARING     // Bếp đang chế biến món
+  READY         // Món đã xong & đóng gói, chờ khách ghé lấy
+  COMPLETED     // Khách đã đến nhận món thành công
+  CANCELLED     // Đơn bị hủy (bởi khách hoặc chi nhánh)
+}
