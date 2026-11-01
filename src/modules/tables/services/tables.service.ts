@@ -23,6 +23,7 @@ import { BulkCreateRestaurantTableDto } from '../dto/bulk-create-restaurant-tabl
 import { QueryTableTypeDto } from '../dto/query-table-type.dto';
 import { QueryRestaurantTableDto } from '../dto/query-restaurant-table.dto';
 import { UpdateTableStatusDto } from '../dto/update-table-status.dto';
+import { BulkCleanTablesDto } from '../dto/bulk-clean-tables.dto';
 import { Prisma, ReservationStatus, RestaurantTableStatus, Role } from '@prisma/client';
 import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
 import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
@@ -514,6 +515,74 @@ status: dto.status,
         occupancyRate,
       },
       floors,
+    };
+  }
+
+  async bulkCleanTables(
+    branchId: string,
+    dto: BulkCleanTablesDto,
+    user?: ICurrentUser,
+  ) {
+    if (user && user.role === Role.STAFF) {
+      if (user.branchId && user.branchId !== branchId) {
+        throw new ForbiddenException('Bạn không có quyền quản lý bàn của chi nhánh này.');
+      }
+    }
+
+    const where: Prisma.RestaurantTableWhereInput = {
+      branchId,
+      isActive: true,
+    };
+
+    if (dto.tableIds && dto.tableIds.length > 0) {
+      where.id = { in: dto.tableIds };
+    } else {
+      where.status = RestaurantTableStatus.DIRTY;
+    }
+
+    const targetTables = await this.prisma.restaurantTable.findMany({
+      where,
+      select: { id: true, tableNumber: true },
+    });
+
+    if (targetTables.length === 0) {
+      return {
+        count: 0,
+        cleanedTables: [],
+        message: 'Không có bàn nào cần dọn dẹp.',
+      };
+    }
+
+    const targetIds = targetTables.map((t) => t.id);
+
+    await this.prisma.restaurantTable.updateMany({
+      where: { id: { in: targetIds } },
+      data: {
+        status: RestaurantTableStatus.AVAILABLE,
+        note: dto.note !== undefined ? dto.note : null,
+      },
+    });
+
+    if (targetIds.length > 0) {
+      await this.redisClient.hdel(`table:dirty-times:${branchId}`, ...targetIds);
+    }
+
+    try {
+      for (const table of targetTables) {
+        this.tablesGateway?.notifyTableStatusChanged(branchId, {
+          id: table.id,
+          status: RestaurantTableStatus.AVAILABLE,
+          dirtySince: null,
+        });
+      }
+    } catch {
+      // Bỏ qua lỗi phát sóng socket nếu có
+    }
+
+    return {
+      count: targetIds.length,
+      cleanedTables: targetTables,
+      message: `Đã dọn sạch ${targetIds.length} bàn thành công.`,
     };
   }
 }
