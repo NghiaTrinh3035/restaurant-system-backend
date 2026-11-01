@@ -162,6 +162,12 @@ export class ReservationsService {
       this.tablesGateway.notifyTableReserved(slot);
     }
 
+    try {
+      this.tablesGateway.notifyReservationCreated(dto.branchId, created);
+    } catch {
+      // Bỏ qua lỗi socket nếu có
+    }
+
     return created;
   }
 
@@ -373,7 +379,7 @@ export class ReservationsService {
       throw new BadRequestException('Đã đến giờ hẹn, không thể hủy trực tuyến. Vui lòng liên hệ nhà hàng.');
     }
 
-    return this.prisma.reservation.update({
+    const updated = await this.prisma.reservation.update({
       where: { id: reservation.id },
       data: {
         status: ReservationStatus.CANCELLED,
@@ -381,6 +387,14 @@ export class ReservationsService {
       },
       include: { branch: true },
     });
+
+    try {
+      this.tablesGateway.notifyReservationUpdated(reservation.branchId, updated);
+    } catch {
+      // Bỏ qua lỗi socket nếu có
+    }
+
+    return updated;
   }
 
   async getPreOrders(reservationId: string, user?: ICurrentUser) {
@@ -445,10 +459,22 @@ export class ReservationsService {
       throw new ForbiddenException('Bạn chỉ có quyền cập nhật đơn đặt bàn thuộc chi nhánh của mình.');
     }
 
+    const targetTableId = dto.tableId || reservation.tableId;
+
+    if (dto.tableId && dto.tableId !== reservation.tableId) {
+      const table = await this.prisma.restaurantTable.findFirst({
+        where: { id: dto.tableId, branchId: reservation.branchId, isActive: true },
+      });
+      if (!table) {
+        throw new BadRequestException('Bàn được chọn không tồn tại hoặc không thuộc chi nhánh này.');
+      }
+    }
+
     const updated = await this.prisma.reservation.update({
       where: { id: reservation.id },
       data: {
         status: dto.status,
+        ...(dto.tableId ? { tableId: dto.tableId } : {}),
         ...(dto.status === ReservationStatus.CANCELLED && dto.note
           ? { cancelledReason: dto.note }
           : {}),
@@ -461,10 +487,10 @@ export class ReservationsService {
     });
 
     // Nếu chuyển sang SEATED và có bàn -> Tự động đổi bàn sang OCCUPIED
-    if (dto.status === ReservationStatus.SEATED && reservation.tableId) {
+    if (dto.status === ReservationStatus.SEATED && targetTableId) {
       try {
         await this.tablesService.updateTableStatus(
-          reservation.tableId,
+          targetTableId,
           { status: RestaurantTableStatus.OCCUPIED, note: `Khách ${reservation.customerName} đang dùng bữa` },
           user,
         );
@@ -474,16 +500,41 @@ export class ReservationsService {
     }
 
     // Nếu chuyển sang COMPLETED và có bàn -> Tự động đổi bàn sang DIRTY để đưa vào hàng chờ dọn dẹp
-    if (dto.status === ReservationStatus.COMPLETED && reservation.tableId) {
+    if (dto.status === ReservationStatus.COMPLETED && targetTableId) {
       try {
         await this.tablesService.updateTableStatus(
-          reservation.tableId,
+          targetTableId,
           { status: RestaurantTableStatus.DIRTY, note: `Khách vừa dùng bữa xong (${reservation.reservationCode})` },
           user,
         );
       } catch (err) {
         // Tiếp tục dù lỗi socket
       }
+    }
+
+    // Nếu bị CANCELLED hoặc NO_SHOW và bàn đang OCCUPIED -> giải phóng về AVAILABLE
+    if (
+      (dto.status === ReservationStatus.CANCELLED || dto.status === ReservationStatus.NO_SHOW) &&
+      targetTableId
+    ) {
+      try {
+        const currentTable = await this.prisma.restaurantTable.findUnique({ where: { id: targetTableId } });
+        if (currentTable && currentTable.status === RestaurantTableStatus.OCCUPIED) {
+          await this.tablesService.updateTableStatus(
+            targetTableId,
+            { status: RestaurantTableStatus.AVAILABLE, note: `Giải phóng bàn sau khi hủy đơn ${reservation.reservationCode}` },
+            user,
+          );
+        }
+      } catch (err) {
+        // Tiếp tục dù lỗi socket
+      }
+    }
+
+    try {
+      this.tablesGateway.notifyReservationUpdated(reservation.branchId, updated);
+    } catch {
+      // Bỏ qua lỗi socket nếu có
     }
 
     return updated;
