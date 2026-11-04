@@ -279,4 +279,20 @@ export class TablesGateway
     const room = `branch:${branchId}`;
     this.server.to(room).emit('table:status_changed', tableData);
   }
+
+  /**
+   * Phát sự kiện có đơn đặt bàn mới tạo
+   */
+  notifyReservationCreated(branchId: string, reservation: any) {
+    const room = `branch:${branchId}`;
+    this.server.to(room).emit('reservation:created', reservation);
+  }
+
+  /**
+   * Phát sự kiện đơn đặt bàn được cập nhật trạng thái
+   */
+  notifyReservationUpdated(branchId: string, reservation: any) {
+    const room = `branch:${branchId}`;
+    this.server.to(room).emit('reservation:updated', reservation);
+  }
 }
