@@ -32,7 +32,7 @@ export interface ITableSlot {
   time: string;
 }
 
-interface IStoredLock extends ITableLockInfo {
+export interface IStoredLock extends ITableLockInfo {
   ttl: number;
 }
 
@@ -134,6 +134,9 @@ export class TableLockService {
     }
     if (table.status === RestaurantTableStatus.MAINTENANCE) {
       return { success: false, reason: 'Bàn đang bảo trì, vui lòng chọn bàn khác.' };
+    }
+    if (table.status === RestaurantTableStatus.DIRTY) {
+      return { success: false, reason: 'Bàn đang được nhân viên dọn dẹp, vui lòng chọn bàn khác hoặc chờ trong giây lát.' };
     }
 
     if (slot.guestCount) {
@@ -285,8 +288,13 @@ export class TableLockService {
     );
   }
 
-  private async getLocksOnDate(branchId: string, date: string, tableId = '*'): Promise<IStoredLock[]> {
-    const pattern = `${LOCK_PREFIX}:${branchId}:${tableId}:${date}:*`;
+  /**
+   * Lấy danh sách các khóa giữ bàn còn hiệu lực trong Redis theo chi nhánh / ngày / bàn
+   */
+  async getActiveLocks(branchId?: string, date?: string, tableId = '*'): Promise<IStoredLock[]> {
+    const branchPattern = branchId && branchId !== 'ALL' ? branchId : '*';
+    const datePattern = date || '*';
+    const pattern = `${LOCK_PREFIX}:${branchPattern}:${tableId}:${datePattern}:*`;
     const keys: string[] = [];
     let cursor = '0';
     do {
@@ -305,9 +313,13 @@ export class TableLockService {
     const locks: IStoredLock[] = [];
     values.forEach((raw, i) => {
       const parsed = this.parseLock(raw);
-      if (parsed) locks.push({ ...parsed, ttl: ttls[i] });
+      if (parsed && ttls[i] > 0) locks.push({ ...parsed, ttl: ttls[i] });
     });
     return locks;
+  }
+
+  private async getLocksOnDate(branchId: string, date: string, tableId = '*'): Promise<IStoredLock[]> {
+    return this.getActiveLocks(branchId, date, tableId);
   }
 
   private async getReservedTableIds(
