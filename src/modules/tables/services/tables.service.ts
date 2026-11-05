@@ -5,11 +5,14 @@ import {
   ForbiddenException,
   Inject,
   forwardRef,
+  OnModuleInit,
+  OnModuleDestroy,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { REDIS_CLIENT } from 'src/redis/redis.module';
 import Redis from 'ioredis';
 import { TablesGateway } from 'src/gateway/tables.gateway';
+import { TableLockService } from './table-lock.service';
 import {
   getLocalNow,
   timeStringToMinutes,
@@ -29,13 +32,30 @@ import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
 import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
 
 @Injectable()
-export class TablesService {
+export class TablesService implements OnModuleInit, OnModuleDestroy {
+  private autoExpireInterval?: NodeJS.Timeout;
+
   constructor(
     private readonly prisma: PrismaService,
     @Inject(REDIS_CLIENT) private readonly redisClient: Redis,
     @Inject(forwardRef(() => TablesGateway))
     private readonly tablesGateway: TablesGateway,
+    @Inject(forwardRef(() => TableLockService))
+    private readonly tableLockService: TableLockService,
   ) {}
+
+  onModuleInit() {
+    // Quét định kỳ mỗi 60 giây kiểm tra bàn đã quá thời gian dùng bữa
+    this.autoExpireInterval = setInterval(() => {
+      this.checkAndAutoExpireSeatedTables().catch(() => {});
+    }, 60 * 1000);
+  }
+
+  onModuleDestroy() {
+    if (this.autoExpireInterval) {
+      clearInterval(this.autoExpireInterval);
+    }
+  }
 
   // ==========================================
   // TABLE TYPE
@@ -245,7 +265,7 @@ status: dto.status,
         !query.floor &&
         !query.status)
     ) {
-      return this.prisma.restaurantTable.findMany({
+      const rawTables = await this.prisma.restaurantTable.findMany({
         where,
         orderBy: [{ floor: 'asc' }, { tableNumber: 'asc' }],
         include: {
@@ -253,6 +273,7 @@ status: dto.status,
           branch: { select: { id: true, name: true } },
         },
       });
+      return this.enrichTablesWithRealtimeData(rawTables, query?.branchId);
     }
 
     const page = query.page || 1;
@@ -273,14 +294,16 @@ status: dto.status,
       this.prisma.restaurantTable.count({ where }),
     ]);
 
+    const enrichedItems = await this.enrichTablesWithRealtimeData(items, query?.branchId);
+
     return {
-      items,
+      items: enrichedItems,
       meta: new PaginationMetaDto(page, limit, totalItems),
     };
   }
 
   async getRestaurantTablesByBranch(branchId: string) {
-    return this.prisma.restaurantTable.findMany({
+    const tables = await this.prisma.restaurantTable.findMany({
       where: {
         branchId,
         isActive: true,
@@ -290,6 +313,7 @@ status: dto.status,
         tableType: true,
       },
     });
+    return this.enrichTablesWithRealtimeData(tables, branchId);
   }
 
   async getRestaurantTableById(id: string) {
@@ -396,6 +420,12 @@ status: dto.status,
       await this.redisClient.hdel(`table:dirty-times:${table.branchId}`, table.id);
     }
 
+    if (dto.status === RestaurantTableStatus.OCCUPIED) {
+      await this.redisClient.hset(`table:occupied-times:${table.branchId}`, table.id, Date.now().toString());
+    } else {
+      await this.redisClient.hdel(`table:occupied-times:${table.branchId}`, table.id);
+    }
+
     const result = { ...updated, dirtySince };
 
     try {
@@ -414,8 +444,11 @@ status: dto.status,
       }
     }
 
+    // Tự động kiểm tra các bàn quá thời gian dùng bữa để chuyển DIRTY trước khi trả về thống kê
+    await this.checkAndAutoExpireSeatedTables().catch(() => {});
+
     const now = getLocalNow();
-    const [tables, dirtyTimes, todayReservations] = await Promise.all([
+    const [tables, dirtyTimes, todayReservations, locks] = await Promise.all([
       this.prisma.restaurantTable.findMany({
         where: {
           branchId,
@@ -442,6 +475,7 @@ status: dto.status,
         },
         orderBy: { reservationTime: 'asc' },
       }),
+      this.tableLockService.getActiveLocks(branchId, now.date),
     ]);
 
     // Map lượt đặt bàn tiếp theo trong ngày cho từng bàn
@@ -462,6 +496,7 @@ status: dto.status,
     }
 
     let available = 0;
+    let locked = 0;
     let occupied = 0;
     let dirty = 0;
     let maintenance = 0;
@@ -469,6 +504,9 @@ status: dto.status,
     const floorMap = new Map<number, any[]>();
 
     for (const t of tables) {
+      const activeLock = locks.find((l) => l.tableId === t.id);
+      if (activeLock) locked++;
+
       if (t.status === RestaurantTableStatus.AVAILABLE) available++;
       else if (t.status === RestaurantTableStatus.OCCUPIED) occupied++;
       else if (t.status === RestaurantTableStatus.DIRTY) dirty++;
@@ -482,10 +520,17 @@ status: dto.status,
             : Date.now()
           : null;
 
+      const nextRes = nextReservationMap.get(t.id) || null;
       const tableWithMeta = {
         ...t,
         dirtySince,
-        nextReservation: nextReservationMap.get(t.id) || null,
+        lockStatus: {
+          isLocked: !!activeLock,
+          lockedByMe: false,
+          expiresIn: activeLock?.ttl || null,
+        },
+        nextReservation: nextRes,
+        isReserved: !!nextRes,
       };
 
       const list = floorMap.get(t.floor) || [];
@@ -509,6 +554,7 @@ status: dto.status,
       summary: {
         total: totalActive,
         available,
+        locked,
         occupied,
         dirty,
         maintenance,
@@ -516,6 +562,167 @@ status: dto.status,
       },
       floors,
     };
+  }
+
+  /**
+   * Bổ sung dữ liệu realtime (khóa giữ chỗ Redis, đơn đặt hôm nay, thời gian dọn) vào danh sách bàn
+   */
+  private async enrichTablesWithRealtimeData(tables: any[], branchId?: string) {
+    if (!tables || tables.length === 0) return [];
+
+    const now = getLocalNow();
+    const today = toDateOnly(now.date);
+    const tableIds = tables.map((t) => t.id);
+
+    const branchIds =
+      branchId && branchId !== 'ALL'
+        ? [branchId]
+        : Array.from(new Set<string>(tables.map((t) => t.branchId).filter(Boolean)));
+
+    const [locks, dirtyTimesList, todayReservations] = await Promise.all([
+      this.tableLockService.getActiveLocks(branchId, now.date),
+      Promise.all(branchIds.map((bId) => this.redisClient.hgetall(`table:dirty-times:${bId}`))),
+      this.prisma.reservation.findMany({
+        where: {
+          reservationDate: today,
+          status: { in: [ReservationStatus.PENDING, ReservationStatus.CONFIRMED] },
+          tableId: { in: tableIds },
+        },
+        select: {
+          id: true,
+          tableId: true,
+          reservationTime: true,
+          customerName: true,
+          guestCount: true,
+          status: true,
+        },
+        orderBy: { reservationTime: 'asc' },
+      }),
+    ]);
+
+    const dirtyTimesMap = new Map<string, string>();
+    dirtyTimesList.forEach((dt) => {
+      Object.entries(dt).forEach(([tId, timeStr]) => dirtyTimesMap.set(tId, timeStr));
+    });
+
+    const nextReservationMap = new Map<
+      string,
+      { reservationTime: string; customerName: string; guestCount: number; status: string }
+    >();
+    for (const res of todayReservations) {
+      if (!res.tableId) continue;
+      const resMins = timeStringToMinutes(res.reservationTime);
+      // Đơn đặt trong ngày chưa qua quá 60 phút
+      if (resMins >= now.minutes - 60 && !nextReservationMap.has(res.tableId)) {
+        nextReservationMap.set(res.tableId, {
+          reservationTime: res.reservationTime,
+          customerName: res.customerName,
+          guestCount: res.guestCount,
+          status: res.status,
+        });
+      }
+    }
+
+    return tables.map((t) => {
+      const activeLock = locks.find((l) => l.tableId === t.id);
+      const nextRes = nextReservationMap.get(t.id);
+      const dirtyTimestampStr = dirtyTimesMap.get(t.id);
+      const dirtySince =
+        t.status === RestaurantTableStatus.DIRTY
+          ? dirtyTimestampStr
+            ? Number(dirtyTimestampStr)
+            : Date.now()
+          : null;
+
+      return {
+        ...t,
+        dirtySince,
+        lockStatus: {
+          isLocked: !!activeLock,
+          lockedByMe: false,
+          expiresIn: activeLock?.ttl || null,
+        },
+        nextReservation: nextRes || null,
+        isReserved: !!nextRes,
+      };
+    });
+  }
+
+  /**
+   * Tự động quét và chuyển trạng thái các bàn đang OCCUPIED có khách SEATED đã dùng bữa quá thời lượng slot
+   * sang trạng thái DIRTY (Cần dọn dẹp), đồng thời hoàn thành đơn đặt bàn (COMPLETED).
+   */
+  async checkAndAutoExpireSeatedTables(): Promise<void> {
+    const now = getLocalNow();
+    const today = toDateOnly(now.date);
+
+    // 1. Quét các đơn đặt bàn SEATED hôm nay
+    const seatedReservations = await this.prisma.reservation.findMany({
+      where: {
+        reservationDate: today,
+        status: ReservationStatus.SEATED,
+        tableId: { not: null },
+      },
+      include: {
+        branch: { select: { slotDurationMinutes: true } },
+        table: true,
+      },
+    });
+
+    for (const res of seatedReservations) {
+      if (!res.tableId || !res.table) continue;
+
+      const duration = res.slotDurationMinutes || res.branch?.slotDurationMinutes || 90;
+
+      // Thời điểm bắt đầu ăn (minutes)
+      let startMins = timeStringToMinutes(res.reservationTime);
+      if (res.updatedAt) {
+        const updatedDate = toDateOnly(res.updatedAt.toISOString().slice(0, 10));
+        if (updatedDate.getTime() === today.getTime()) {
+          const seatedMins = res.updatedAt.getHours() * 60 + res.updatedAt.getMinutes();
+          startMins = Math.max(startMins, seatedMins);
+        }
+      }
+
+      const expiredAtMins = startMins + duration;
+
+      if (now.minutes >= expiredAtMins) {
+        try {
+          const updatedRes = await this.prisma.reservation.update({
+            where: { id: res.id },
+            data: { status: ReservationStatus.COMPLETED },
+            include: { branch: true, table: true, orders: { include: { menuItem: true } } },
+          });
+
+          const dirtySince = Date.now();
+          await this.prisma.restaurantTable.update({
+            where: { id: res.tableId },
+            data: {
+              status: RestaurantTableStatus.DIRTY,
+              note: `Bữa ăn kết thúc tự động sau ${duration} phút (${res.reservationCode})`,
+            },
+          });
+
+          await this.redisClient.hset(
+            `table:dirty-times:${res.branchId}`,
+            res.tableId,
+            dirtySince.toString(),
+          );
+          await this.redisClient.hdel(`table:occupied-times:${res.branchId}`, res.tableId);
+
+          this.tablesGateway?.notifyTableStatusChanged(res.branchId, {
+            id: res.tableId,
+            status: RestaurantTableStatus.DIRTY,
+            dirtySince,
+            tableNumber: res.table.tableNumber,
+            note: `Khách vừa dùng bữa xong (${res.reservationCode})`,
+          });
+          this.tablesGateway?.notifyReservationUpdated(res.branchId, updatedRes);
+        } catch (err) {
+          // Bỏ qua lỗi từng đơn để tiếp tục vòng lặp
+        }
+      }
+    }
   }
 
   async bulkCleanTables(
