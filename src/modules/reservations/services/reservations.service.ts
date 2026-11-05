@@ -29,6 +29,11 @@ import {
 import { ReservationAvailabilityService } from './reservation-availability.service';
 
 const EDITABLE_STATUSES: ReservationStatus[] = [ReservationStatus.PENDING, ReservationStatus.CONFIRMED];
+const ORDER_ALLOWED_STATUSES: ReservationStatus[] = [
+  ReservationStatus.PENDING,
+  ReservationStatus.CONFIRMED,
+  ReservationStatus.SEATED,
+];
 
 @Injectable()
 export class ReservationsService {
@@ -427,11 +432,19 @@ export class ReservationsService {
   ) {
     const reservation = await this.getReservationById(reservationId, user);
 
+    if (user && user.role === Role.STAFF && user.branchId && reservation.branchId !== user.branchId) {
+      throw new ForbiddenException('Bạn chỉ có quyền cập nhật món ăn của đơn đặt bàn thuộc chi nhánh của mình.');
+    }
+
+    if (!ORDER_ALLOWED_STATUSES.includes(reservation.status)) {
+      throw new BadRequestException('Đơn đặt bàn đã kết thúc hoặc đã bị hủy, không thể gọi thêm món.');
+    }
+
     if (
-      !EDITABLE_STATUSES.includes(reservation.status) ||
+      (reservation.status === ReservationStatus.PENDING || reservation.status === ReservationStatus.CONFIRMED) &&
       hasReservationStarted(reservation.reservationDate, reservation.reservationTime)
     ) {
-      throw new BadRequestException('Không thể chỉnh sửa món ăn của đơn đặt bàn này.');
+      throw new BadRequestException('Đã qua giờ hẹn đặt bàn, vui lòng liên hệ nhà hàng để hỗ trợ.');
     }
 
     const lines = await this.resolvePreOrderLines(reservation.branchId, items);
@@ -445,7 +458,25 @@ export class ReservationsService {
       }
     });
 
-    return this.getPreOrders(reservation.id, user);
+    const updatedPreOrders = await this.getPreOrders(reservation.id, user);
+
+    try {
+      const fullUpdated = await this.prisma.reservation.findUnique({
+        where: { id: reservation.id },
+        include: {
+          branch: true,
+          table: true,
+          orders: { include: { menuItem: true } },
+        },
+      });
+      if (fullUpdated) {
+        this.tablesGateway.notifyReservationUpdated(reservation.branchId, fullUpdated);
+      }
+    } catch {
+      // Bỏ qua lỗi socket nếu có
+    }
+
+    return updatedPreOrders;
   }
 
   async updateReservationStatus(
