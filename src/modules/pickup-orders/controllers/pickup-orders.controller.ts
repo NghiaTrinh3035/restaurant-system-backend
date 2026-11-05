@@ -33,7 +33,7 @@ export class PickupOrdersController {
   @Post()
   @Public()
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Khách hàng đặt trước món ăn hẹn giờ đến lấy mang về (RRMS-32)' })
+  @ApiOperation({ summary: 'Khách hàng đặt trước món ăn hẹn giờ đến lấy mang về' })
   @ResponseMessage('Đặt món mang về thành công.')
   async createPickupOrder(
     @Body() dto: CreatePickupOrderDto,
