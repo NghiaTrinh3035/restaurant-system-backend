@@ -28,6 +28,9 @@ import {
 } from '../helpers/reservation.helper';
 import { ReservationAvailabilityService } from './reservation-availability.service';
 
+import { MailService } from 'src/mail/mail.service';
+import { Logger } from '@nestjs/common';
+
 const EDITABLE_STATUSES: ReservationStatus[] = [ReservationStatus.PENDING, ReservationStatus.CONFIRMED];
 const ORDER_ALLOWED_STATUSES: ReservationStatus[] = [
   ReservationStatus.PENDING,
@@ -37,12 +40,15 @@ const ORDER_ALLOWED_STATUSES: ReservationStatus[] = [
 
 @Injectable()
 export class ReservationsService {
+  private readonly logger = new Logger(ReservationsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly availability: ReservationAvailabilityService,
     private readonly tableLockService: TableLockService,
     private readonly tablesGateway: TablesGateway,
     private readonly tablesService: TablesService,
+    private readonly mailService: MailService,
   ) {}
 
   async createReservation(dto: CreateReservationDto, user?: ICurrentUser) {
@@ -514,8 +520,44 @@ export class ReservationsService {
         branch: true,
         table: true,
         orders: { include: { menuItem: true } },
+        user: { select: { email: true, fullName: true } },
       },
     });
+
+    // Nếu chuyển sang CONFIRMED -> Gửi email xác nhận đặt bàn cho khách hàng (bất đồng bộ)
+    if (dto.status === ReservationStatus.CONFIRMED) {
+      const recipientEmail = updated.customerEmail || updated.user?.email;
+      if (recipientEmail) {
+        const dateStr =
+          updated.reservationDate instanceof Date
+            ? updated.reservationDate.toISOString().slice(0, 10)
+            : String(updated.reservationDate).slice(0, 10);
+
+        this.mailService
+          .sendReservationConfirmedEmail(recipientEmail, {
+            customerName: updated.customerName,
+            reservationCode: updated.reservationCode,
+            branchName: updated.branch?.name || 'FoodHub Restaurant',
+            branchAddress: updated.branch?.address || updated.branch?.streetAddress || null,
+            branchPhone: updated.branch?.phone || null,
+            reservationDate: dateStr,
+            reservationTime: updated.reservationTime,
+            guestCount: updated.guestCount,
+            tableName: updated.table?.tableNumber || null,
+            floor: updated.table?.floor || null,
+            specialNotes: updated.specialNotes || null,
+            orders: (updated.orders || []).map((o) => ({
+              name: o.menuItem?.name || 'Món ăn',
+              quantity: o.quantity,
+              unitPrice: Number(o.unitPrice),
+              subtotal: Number(o.unitPrice) * o.quantity,
+            })),
+          })
+          .catch((err) => {
+            this.logger.error(`[Mail] Gửi email xác nhận đặt bàn thất bại cho ${recipientEmail}:`, err);
+          });
+      }
+    }
 
     // Nếu chuyển sang SEATED và có bàn -> Tự động đổi bàn sang OCCUPIED
     if (dto.status === ReservationStatus.SEATED && targetTableId) {

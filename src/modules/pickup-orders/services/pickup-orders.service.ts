@@ -3,9 +3,11 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Logger,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { TablesGateway } from 'src/gateway/tables.gateway';
+import { MailService } from 'src/mail/mail.service';
 import { CreatePickupOrderDto } from '../dtos/create-pickup-order.dto';
 import { QueryPickupOrderDto } from '../dtos/query-pickup-order.dto';
 import { UpdatePickupOrderStatusDto } from '../dtos/update-pickup-order-status.dto';
@@ -23,9 +25,12 @@ import {
 
 @Injectable()
 export class PickupOrdersService {
+  private readonly logger = new Logger(PickupOrdersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly tablesGateway: TablesGateway,
+    private readonly mailService: MailService,
   ) {}
 
   async createPickupOrder(dto: CreatePickupOrderDto, user?: ICurrentUser) {
@@ -145,13 +150,45 @@ export class PickupOrdersService {
       return tx.pickupOrder.findUnique({
         where: { id: order.id },
         include: {
-          branch: { select: { id: true, name: true, phone: true, streetAddress: true } },
+          branch: { select: { id: true, name: true, phone: true, streetAddress: true, address: true } },
           items: { include: { menuItem: true } },
         },
       });
     });
 
-    // Phát sóng WebSocket thông báo cho chi nhánh có đơn mang về mới
+    // 1. Gửi email hóa đơn & xác nhận đơn mang về cho khách (bất đồng bộ)
+    const recipientEmail = createdOrder?.customerEmail || user?.email;
+    if (recipientEmail && createdOrder) {
+      const dateStr =
+        createdOrder.pickupDate instanceof Date
+          ? createdOrder.pickupDate.toISOString().slice(0, 10)
+          : String(createdOrder.pickupDate).slice(0, 10);
+
+      this.mailService
+        .sendPickupOrderInvoiceEmail(recipientEmail, {
+          customerName: createdOrder.customerName,
+          orderCode: createdOrder.orderCode,
+          branchName: createdOrder.branch?.name || 'FoodHub Restaurant',
+          branchAddress: createdOrder.branch?.streetAddress || createdOrder.branch?.address || null,
+          branchPhone: createdOrder.branch?.phone || null,
+          pickupDate: dateStr,
+          pickupTime: createdOrder.pickupTime,
+          items: (createdOrder.items || []).map((i) => ({
+            name: i.menuItem?.name || 'Món ăn',
+            quantity: i.quantity,
+            unitPrice: Number(i.unitPrice),
+            subtotal: Number(i.subtotal),
+            note: i.note,
+          })),
+          totalAmount: Number(createdOrder.totalAmount),
+          specialNotes: createdOrder.specialNotes,
+        })
+        .catch((err) => {
+          this.logger.error(`[Mail] Gửi hóa đơn đơn mang về thất bại cho ${recipientEmail}:`, err);
+        });
+    }
+
+    // 2. Phát sóng WebSocket thông báo cho chi nhánh có đơn mang về mới
     try {
       this.tablesGateway.server?.to(`branch:${dto.branchId}`).emit('pickupOrder:created', createdOrder);
     } catch {
@@ -349,8 +386,30 @@ export class PickupOrdersService {
       include: {
         branch: true,
         items: { include: { menuItem: true } },
+        user: { select: { email: true, fullName: true } },
       },
     });
+
+    // Gửi email thông báo món đã sẵn sàng khi bếp hoàn tất chế biến (status === READY)
+    if (dto.status === PickupOrderStatus.READY) {
+      const recipientEmail = updated.customerEmail || updated.user?.email;
+      if (recipientEmail) {
+        this.mailService
+          .sendPickupOrderReadyEmail(recipientEmail, {
+            customerName: updated.customerName,
+            orderCode: updated.orderCode,
+            branchName: updated.branch?.name || 'FoodHub Restaurant',
+            branchAddress: updated.branch?.streetAddress || updated.branch?.address || null,
+            branchPhone: updated.branch?.phone || null,
+            pickupTime: updated.pickupTime,
+            totalAmount: Number(updated.totalAmount),
+            itemCount: updated.items?.length || 0,
+          })
+          .catch((err) => {
+            this.logger.error(`[Mail] Gửi thông báo món ăn sẵn sàng thất bại cho ${recipientEmail}:`, err);
+          });
+      }
+    }
 
     try {
       this.tablesGateway.server?.to(`branch:${order.branchId}`).emit('pickupOrder:statusChanged', updated);
