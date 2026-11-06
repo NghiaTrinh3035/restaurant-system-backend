@@ -5,9 +5,10 @@ import { ReservationAvailabilityService } from './services/reservation-availabil
 import { PrismaModule } from 'src/prisma/prisma.module';
 import { TablesModule } from 'src/modules/tables/tables.module';
 import { GatewayModule } from 'src/gateway/gateway.module';
+import { MailModule } from 'src/mail/mail.module';
 
 @Module({
-  imports: [PrismaModule, TablesModule, GatewayModule],
+  imports: [PrismaModule, TablesModule, GatewayModule, MailModule],
   controllers: [ReservationsController],
   providers: [ReservationsService, ReservationAvailabilityService],
   exports: [ReservationsService],

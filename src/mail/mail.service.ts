@@ -3,6 +3,18 @@ import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import { Transporter } from 'nodemailer';
 import { buildOtpEmailTemplate } from './templates/otp.template';
+import {
+  buildReservationConfirmedEmailTemplate,
+  ReservationConfirmedEmailData,
+} from './templates/reservation-confirmed.template';
+import {
+  buildPickupOrderInvoiceEmailTemplate,
+  PickupOrderInvoiceEmailData,
+} from './templates/pickup-order-invoice.template';
+import {
+  buildPickupOrderReadyEmailTemplate,
+  PickupOrderReadyEmailData,
+} from './templates/pickup-order-ready.template';
 
 export interface SendMailOptions {
   to: string;
@@ -143,26 +155,59 @@ export class MailService {
   }
 
   /**
-   * Gửi email xác nhận đặt bàn.
-   * @todo Implement khi có tính năng Reservation.
+   * Gửi email xác nhận đặt bàn khi nhân viên duyệt đơn (CONFIRMED).
    */
-  async sendReservationEmail(
-    _to: string,
-    _reservationDetails: Record<string, unknown>,
+  async sendReservationConfirmedEmail(
+    to: string,
+    data: ReservationConfirmedEmailData,
   ): Promise<void> {
-    // TODO: implement when Reservation Confirmation feature is ready
-    throw new Error('sendReservationEmail is not implemented yet');
+    const subject = `🍽️ Xác nhận đặt bàn thành công [${data.reservationCode}] — FoodHub`;
+    const html = buildReservationConfirmedEmailTemplate(data);
+
+    await this.sendMail({
+      to,
+      subject,
+      html,
+      type: 'RESERVATION_CONFIRMED',
+      data: { reservationCode: data.reservationCode },
+    });
   }
 
   /**
-   * Gửi email xác nhận thanh toán.
-   * @todo Implement khi có tính năng Payment.
+   * Gửi email hóa đơn & xác nhận đơn mang về khi khách đặt và thanh toán thành công.
    */
-  async sendPaymentEmail(
-    _to: string,
-    _paymentDetails: Record<string, unknown>,
+  async sendPickupOrderInvoiceEmail(
+    to: string,
+    data: PickupOrderInvoiceEmailData,
   ): Promise<void> {
-    // TODO: implement when Payment Confirmation feature is ready
-    throw new Error('sendPaymentEmail is not implemented yet');
+    const subject = `🧾 Hóa đơn & Xác nhận đơn mang về [${data.orderCode}] — FoodHub`;
+    const html = buildPickupOrderInvoiceEmailTemplate(data);
+
+    await this.sendMail({
+      to,
+      subject,
+      html,
+      type: 'PICKUP_ORDER_INVOICE',
+      data: { orderCode: data.orderCode },
+    });
+  }
+
+  /**
+   * Gửi email thông báo món ăn đã được nhà bếp chuẩn bị xong (READY) chờ khách đến nhận.
+   */
+  async sendPickupOrderReadyEmail(
+    to: string,
+    data: PickupOrderReadyEmailData,
+  ): Promise<void> {
+    const subject = `🥡 Món ăn đã sẵn sàng để lấy! [${data.orderCode}] — FoodHub`;
+    const html = buildPickupOrderReadyEmailTemplate(data);
+
+    await this.sendMail({
+      to,
+      subject,
+      html,
+      type: 'PICKUP_ORDER_READY',
+      data: { orderCode: data.orderCode },
+    });
   }
 }
