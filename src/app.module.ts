@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { validate, configs } from './config';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
@@ -21,6 +22,8 @@ import { PickupOrdersModule } from './modules/pickup-orders/pickup-orders.module
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      validate,
+      load: configs,
     }),
     ThrottlerModule.forRoot([
       {
