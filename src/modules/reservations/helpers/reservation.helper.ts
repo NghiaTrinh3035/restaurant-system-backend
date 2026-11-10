@@ -59,8 +59,8 @@ export function generateDailyTimeSlots(
   return slots;
 }
 
-/** Ngày (YYYY-MM-DD) và số phút trong ngày hiện tại theo giờ nhà hàng */
-export function getLocalNow(): { date: string; minutes: number } {
+/** Ngày (YYYY-MM-DD) và số phút trong ngày theo giờ nhà hàng (UTC+7) */
+export function getLocalNow(date: Date = new Date()): { date: string; minutes: number } {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: RESERVATION_TIMEZONE,
     year: 'numeric',
@@ -69,7 +69,7 @@ export function getLocalNow(): { date: string; minutes: number } {
     hour: '2-digit',
     minute: '2-digit',
     hourCycle: 'h23',
-  }).formatToParts(new Date());
+  }).formatToParts(date);
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '00';
 
   return {

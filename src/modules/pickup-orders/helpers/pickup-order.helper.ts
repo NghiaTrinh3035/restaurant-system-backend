@@ -39,7 +39,7 @@ export function getLocalNow(): { date: string; time: string; minutes: number } {
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
-    hour12: false,
+    hourCycle: 'h23',
   });
   const parts = formatter.formatToParts(now);
   const get = (type: string) => parts.find((p) => p.type === type)?.value || '';

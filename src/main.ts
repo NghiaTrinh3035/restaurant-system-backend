@@ -1,25 +1,26 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+
+// Đảm bảo toàn bộ Date/log trong Node.js vận hành theo múi giờ Việt Nam ngay từ lúc khởi động
+process.env.TZ = 'Asia/Ho_Chi_Minh';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 
 import { TransformInterceptor } from './core/common/interceptors/transform.interceptor';
-import { GlobalExceptionFilter } from './core/exceptions/global-exception.filter';
+import { GlobalExceptionFilter } from './core/common/filters/global-exception.filter';
 import { Reflector } from '@nestjs/core';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const configService = app.get(ConfigService);
 
   // Enable cookie parser
   app.use(cookieParser());
 
   // Parse CORS origins from .env (credentials: true requires explicit origin list, never wildcard '*')
-  const rawCors = process.env.CORS_ALLOWED_ORIGINS;
-  const corsOrigins = rawCors
-    ? rawCors.split(',').map(origin => origin.trim()).filter(Boolean)
-    : ['http://localhost:5173', 'http://127.0.0.1:5173'];
+  const corsOrigins = configService.getOrThrow<string[]>('app.corsAllowedOrigins');
 
   // Enable CORS
   app.enableCors({
@@ -53,8 +54,7 @@ async function bootstrap() {
   const documentFactory = () => SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, documentFactory);
 
-  const configService = app.get(ConfigService);
   const port = configService.getOrThrow<number>('PORT');
   await app.listen(port);
 }
-bootstrap();
+void bootstrap();

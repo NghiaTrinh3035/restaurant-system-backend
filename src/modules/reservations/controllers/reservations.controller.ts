@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { ReservationsService } from '../services/reservations.service';
+import { ReservationAvailabilityService } from '../services/reservation-availability.service';
 import { CreateReservationDto } from '../dto/create-reservation.dto';
 import { QueryAvailableSlotsDto } from '../dto/query-available-slots.dto';
 import { QueryReservationDto } from '../dto/query-reservation.dto';
@@ -31,7 +32,10 @@ import type { ICurrentUser } from 'src/core/common/interfaces/current-user.inter
 @ApiTags('Reservations')
 @Controller('reservations')
 export class ReservationsController {
-  constructor(private readonly reservationsService: ReservationsService) {}
+  constructor(
+    private readonly reservationsService: ReservationsService,
+    private readonly availabilityService: ReservationAvailabilityService,
+  ) {}
 
   @Post()
   @Public()
@@ -49,7 +53,7 @@ export class ReservationsController {
   @HttpCode(HttpStatus.OK)
   @ResponseMessage('Lấy danh sách khung giờ phục vụ thành công.')
   async getAvailableSlots(@Query() query: QueryAvailableSlotsDto) {
-    return this.reservationsService.getAvailableSlots(query);
+    return this.availabilityService.getAvailableSlots(query);
   }
 
   @Get('my-history')

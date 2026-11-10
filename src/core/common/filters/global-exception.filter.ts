@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { Response } from 'express';
 import { ThrottlerException } from '@nestjs/throttler';
-import { ApiResponseDto } from '../dto/api-response.dto';
+import { ApiResponseDto } from '../../dto/api-response.dto';
 
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
