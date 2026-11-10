@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ConflictException,
   ForbiddenException,
@@ -33,6 +34,12 @@ import type { ICurrentUser } from 'src/core/common/interfaces/current-user.inter
 
 @Injectable()
 export class TablesService implements OnModuleInit, OnModuleDestroy {
+  private static readonly AUTO_EXPIRE_INTERVAL_MS = 60 * 1000;
+  // Giữ khóa gần trọn chu kỳ 60s để các instance lệch nhịp không quét DB lặp lại
+  private static readonly AUTO_EXPIRE_LOCK_TTL_MS = 55 * 1000;
+  private static readonly AUTO_EXPIRE_LOCK_KEY = 'tables:auto-expire:interval-lock';
+
+  private readonly logger = new Logger(TablesService.name);
   private autoExpireInterval?: NodeJS.Timeout;
 
   constructor(
@@ -45,10 +52,9 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
-    // Quét định kỳ mỗi 60 giây kiểm tra bàn đã quá thời gian dùng bữa
     this.autoExpireInterval = setInterval(() => {
-      this.checkAndAutoExpireSeatedTables().catch(() => {});
-    }, 60 * 1000);
+      void this.runScheduledAutoExpire();
+    }, TablesService.AUTO_EXPIRE_INTERVAL_MS);
   }
 
   onModuleDestroy() {
@@ -57,9 +63,23 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  // ==========================================
-  // TABLE TYPE
-  // ==========================================
+  async runScheduledAutoExpire(): Promise<void> {
+    try {
+      const acquired = await this.redisClient.set(
+        TablesService.AUTO_EXPIRE_LOCK_KEY,
+        process.pid.toString(),
+        'PX',
+        TablesService.AUTO_EXPIRE_LOCK_TTL_MS,
+        'NX',
+      );
+      if (!acquired) return;
+      await this.checkAndAutoExpireSeatedTables();
+    } catch (err) {
+      this.logger.warn(
+        `Auto-expire seated tables failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   async createTableType(dto: CreateTableTypeDto) {
     return this.prisma.tableType.create({ data: dto });
@@ -135,10 +155,6 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       where: { id },
     });
   }
-
-  // ==========================================
-  // RESTAURANT TABLE
-  // ==========================================
 
   async createRestaurantTable(dto: CreateRestaurantTableDto) {
     const branch = await this.prisma.restaurantBranch.findUnique({
@@ -445,7 +461,11 @@ status: dto.status,
     }
 
     // Tự động kiểm tra các bàn quá thời gian dùng bữa để chuyển DIRTY trước khi trả về thống kê
-    await this.checkAndAutoExpireSeatedTables().catch(() => {});
+    await this.checkAndAutoExpireSeatedTables().catch((err) => {
+      this.logger.warn(
+        `Auto-expire during turnover stats failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
 
     const now = getLocalNow();
     const [tables, dirtyTimes, todayReservations, locks] = await Promise.all([
@@ -501,7 +521,21 @@ status: dto.status,
     let dirty = 0;
     let maintenance = 0;
 
-    const floorMap = new Map<number, any[]>();
+    type TurnoverTable = (typeof tables)[number] & {
+      dirtySince: number | null;
+      lockStatus: {
+        isLocked: boolean;
+        lockedByMe: boolean;
+        expiresIn: number | null;
+      };
+      nextReservation: {
+        reservationTime: string;
+        customerName: string;
+        guestCount: number;
+      } | null;
+      isReserved: boolean;
+    };
+    const floorMap = new Map<number, TurnoverTable[]>();
 
     for (const t of tables) {
       const activeLock = locks.find((l) => l.tableId === t.id);
@@ -567,7 +601,9 @@ status: dto.status,
   /**
    * Bổ sung dữ liệu realtime (khóa giữ chỗ Redis, đơn đặt hôm nay, thời gian dọn) vào danh sách bàn
    */
-  private async enrichTablesWithRealtimeData(tables: any[], branchId?: string) {
+  private async enrichTablesWithRealtimeData<
+    T extends { id: string; branchId: string; status: RestaurantTableStatus },
+  >(tables: T[], branchId?: string) {
     if (!tables || tables.length === 0) return [];
 
     const now = getLocalNow();
@@ -656,7 +692,6 @@ status: dto.status,
     const now = getLocalNow();
     const today = toDateOnly(now.date);
 
-    // 1. Quét các đơn đặt bàn SEATED hôm nay
     const seatedReservations = await this.prisma.reservation.findMany({
       where: {
         reservationDate: today,
@@ -664,15 +699,16 @@ status: dto.status,
         tableId: { not: null },
       },
       include: {
-        branch: { select: { slotDurationMinutes: true } },
         table: true,
       },
     });
 
     for (const res of seatedReservations) {
-      if (!res.tableId || !res.table) continue;
+      const { tableId, table } = res;
+      if (!tableId || !table) continue;
 
-      const duration = res.slotDurationMinutes || res.branch?.slotDurationMinutes || 90;
+      const duration = res.slotDurationMinutes;
+      if (duration <= 0) continue;
 
       // Thời điểm bắt đầu ăn (minutes) theo múi giờ nhà hàng (Asia/Ho_Chi_Minh)
       let startMins = timeStringToMinutes(res.reservationTime);
@@ -687,38 +723,53 @@ status: dto.status,
 
       if (now.minutes >= expiredAtMins) {
         try {
-          const updatedRes = await this.prisma.reservation.update({
-            where: { id: res.id },
-            data: { status: ReservationStatus.COMPLETED },
-            include: { branch: true, table: true, orders: { include: { menuItem: true } } },
+          const updatedRes = await this.prisma.$transaction(async (tx) => {
+            // Chặn xử lý trùng khi nhiều luồng hoặc instance cùng quét một đơn SEATED
+            const claim = await tx.reservation.updateMany({
+              where: {
+                id: res.id,
+                status: ReservationStatus.SEATED,
+              },
+              data: { status: ReservationStatus.COMPLETED },
+            });
+            if (claim.count === 0) return null;
+
+            await tx.restaurantTable.update({
+              where: { id: tableId },
+              data: {
+                status: RestaurantTableStatus.DIRTY,
+                note: `Bữa ăn kết thúc tự động sau ${duration} phút (${res.reservationCode})`,
+              },
+            });
+
+            return tx.reservation.findUnique({
+              where: { id: res.id },
+              include: { branch: true, table: true, orders: { include: { menuItem: true } } },
+            });
           });
+
+          if (!updatedRes) continue;
 
           const dirtySince = Date.now();
-          await this.prisma.restaurantTable.update({
-            where: { id: res.tableId },
-            data: {
-              status: RestaurantTableStatus.DIRTY,
-              note: `Bữa ăn kết thúc tự động sau ${duration} phút (${res.reservationCode})`,
-            },
-          });
-
           await this.redisClient.hset(
             `table:dirty-times:${res.branchId}`,
-            res.tableId,
+            tableId,
             dirtySince.toString(),
           );
-          await this.redisClient.hdel(`table:occupied-times:${res.branchId}`, res.tableId);
+          await this.redisClient.hdel(`table:occupied-times:${res.branchId}`, tableId);
 
           this.tablesGateway?.notifyTableStatusChanged(res.branchId, {
-            id: res.tableId,
+            id: tableId,
             status: RestaurantTableStatus.DIRTY,
             dirtySince,
-            tableNumber: res.table.tableNumber,
+            tableNumber: table.tableNumber,
             note: `Khách vừa dùng bữa xong (${res.reservationCode})`,
           });
           this.tablesGateway?.notifyReservationUpdated(res.branchId, updatedRes);
         } catch (err) {
-          // Bỏ qua lỗi từng đơn để tiếp tục vòng lặp
+          this.logger.warn(
+            `Failed to auto-expire reservation ${res.reservationCode}: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
       }
     }

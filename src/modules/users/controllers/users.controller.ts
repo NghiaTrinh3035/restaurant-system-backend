@@ -51,8 +51,6 @@ export class UsersController {
     return this.usersService.updateProfile(userId, body);
   }
 
-  // ==================== ADMIN STAFF MANAGEMENT APIS ====================
-
   @Get('staff')
   @HttpCode(HttpStatus.OK)
   @ResponseMessage('Lấy danh sách nhân viên thành công')

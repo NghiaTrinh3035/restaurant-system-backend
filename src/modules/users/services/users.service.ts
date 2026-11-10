@@ -42,7 +42,7 @@ export class UsersService {
       if (data.fullName !== undefined) updateData.fullName = data.fullName;
       if (data.phone !== undefined) updateData.phone = data.phone;
       if (data.avatar !== undefined) updateData.avatar = data.avatar;
-      if (data.gender !== undefined) updateData.gender = data.gender as any;
+      if (data.gender !== undefined) updateData.gender = data.gender;
 
       return await this.prisma.user.update({
         where: {
@@ -73,8 +73,6 @@ export class UsersService {
       throw error;
     }
   }
-
-  // ==================== STAFF MANAGEMENT METHODS ====================
 
   /**
    * Lấy danh sách nhân viên (Role = STAFF) có phân trang, lọc theo chi nhánh, trạng thái & tìm kiếm

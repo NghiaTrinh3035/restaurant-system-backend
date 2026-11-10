@@ -48,21 +48,20 @@ export class TablesController {
       const authHeader = req.headers.authorization;
       if (authHeader && authHeader.startsWith('Bearer ')) {
         const token = authHeader.substring(7);
-        const decoded = this.authJwtService.decodeToken(token);
-        return decoded?.sub;
+        const decoded = this.authJwtService.decodeToken(token) as { sub?: unknown } | null;
+        return typeof decoded?.sub === 'string' ? decoded.sub : undefined;
       }
-      const cookieToken = (req as any).cookies?.accessToken;
+      const cookies = req.cookies as Record<string, unknown> | undefined;
+      const cookieToken = typeof cookies?.accessToken === 'string' ? cookies.accessToken : undefined;
       if (cookieToken) {
-        const decoded = this.authJwtService.decodeToken(cookieToken);
-        return decoded?.sub;
+        const decoded = this.authJwtService.decodeToken(cookieToken) as { sub?: unknown } | null;
+        return typeof decoded?.sub === 'string' ? decoded.sub : undefined;
       }
-    } catch {}
+    } catch {
+      return undefined;
+    }
     return undefined;
   }
-
-  // ==========================================
-  // TABLE TYPE
-  // ==========================================
 
   @Post('types')
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -99,10 +98,6 @@ export class TablesController {
   deleteTableType(@Param('id') id: string) {
     return this.tablesService.deleteTableType(id);
   }
-
-  // ==========================================
-  // RESTAURANT TABLE
-  // ==========================================
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
