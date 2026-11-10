@@ -8,7 +8,6 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateReservationDto, PreOrderItemDto } from '../dto/create-reservation.dto';
-import { QueryAvailableSlotsDto } from '../dto/query-available-slots.dto';
 import { QueryReservationDto } from '../dto/query-reservation.dto';
 import { QueryMyReservationsDto, ReservationTimeline } from '../dto/query-my-reservations.dto';
 import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
@@ -180,10 +179,6 @@ export class ReservationsService {
     }
 
     return created;
-  }
-
-  getAvailableSlots(query: QueryAvailableSlotsDto) {
-    return this.availability.getAvailableSlots(query);
   }
 
   /**

@@ -1,5 +1,8 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+
+// Đảm bảo toàn bộ Date/log trong Node.js vận hành theo múi giờ Việt Nam ngay từ lúc khởi động
+process.env.TZ = 'Asia/Ho_Chi_Minh';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';

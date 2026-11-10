@@ -674,13 +674,12 @@ status: dto.status,
 
       const duration = res.slotDurationMinutes || res.branch?.slotDurationMinutes || 90;
 
-      // Thời điểm bắt đầu ăn (minutes)
+      // Thời điểm bắt đầu ăn (minutes) theo múi giờ nhà hàng (Asia/Ho_Chi_Minh)
       let startMins = timeStringToMinutes(res.reservationTime);
       if (res.updatedAt) {
-        const updatedDate = toDateOnly(res.updatedAt.toISOString().slice(0, 10));
-        if (updatedDate.getTime() === today.getTime()) {
-          const seatedMins = res.updatedAt.getHours() * 60 + res.updatedAt.getMinutes();
-          startMins = Math.max(startMins, seatedMins);
+        const updatedLocal = getLocalNow(res.updatedAt);
+        if (updatedLocal.date === now.date) {
+          startMins = Math.max(startMins, updatedLocal.minutes);
         }
       }
 
