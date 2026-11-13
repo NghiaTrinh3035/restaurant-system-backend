@@ -10,6 +10,7 @@ import {
 } from '@nestjs/websockets';
 import { Logger, Inject, forwardRef } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
+import { Role } from '@prisma/client';
 import { TableLockService } from 'src/modules/tables/services/table-lock.service';
 import { AuthJwtService } from 'src/core/security/jwt/auth-jwt.service';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -60,6 +61,10 @@ export class TablesGateway
 
         if (user && user.isActive) {
           client.data.user = user;
+          await client.join(`user:${user.id}`);
+          if (user.role === Role.ADMIN) {
+            await client.join('admin:all');
+          }
           this.logger.log(`Client authenticated: ${client.id} (User: ${user.email}, Role: ${user.role})`);
         } else {
           client.data.user = null;
@@ -441,6 +446,26 @@ export class TablesGateway
   }
 
   /**
+   * Quản trị viên tham gia phòng nhận sự kiện toàn hệ thống
+   */
+  @SubscribeMessage('admin:join')
+  async handleJoinAdmin(@ConnectedSocket() client: Socket) {
+    if (client.data?.user?.role !== Role.ADMIN) {
+      return;
+    }
+    await client.join('admin:all');
+    client.emit('admin:joined', { room: 'admin:all' });
+  }
+
+  /**
+   * Quản trị viên rời phòng nhận sự kiện toàn hệ thống
+   */
+  @SubscribeMessage('admin:leave')
+  async handleLeaveAdmin(@ConnectedSocket() client: Socket) {
+    await client.leave('admin:all');
+  }
+
+  /**
    * Phát sự kiện hóa đơn bàn đã thanh toán xong
    */
   notifyTableInvoiceClosed(branchId: string, tableId: string, data: any) {
@@ -449,5 +474,20 @@ export class TablesGateway
 
     this.server.to(branchRoom).emit('table:invoice_closed', data);
     this.server.to(tableRoom).emit('table:invoice_closed', data);
+  }
+
+  /**
+   * Phát sóng sự kiện đơn mang về tới chi nhánh, quản trị viên toàn hệ thống và chủ đơn
+   */
+  notifyPickupOrderEvent(
+    event: 'pickupOrder:created' | 'pickupOrder:statusChanged',
+    order: { branchId: string; userId?: string | null },
+  ) {
+    if (!this.server) return;
+    let emitter = this.server.to(`branch:${order.branchId}`).to('admin:all');
+    if (order.userId) {
+      emitter = emitter.to(`user:${order.userId}`);
+    }
+    emitter.emit(event, order);
   }
 }
