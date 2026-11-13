@@ -44,3 +44,4 @@ export function getLocalNow(date: Date = new Date()): { date: string; minutes: n
     minutes: Number(get('hour')) * 60 + Number(get('minute')),
   };
 }
+

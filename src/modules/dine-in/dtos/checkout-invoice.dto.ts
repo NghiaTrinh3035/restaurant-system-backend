@@ -26,3 +26,4 @@ export class CheckoutInvoiceDto {
   @IsString({ message: 'notes phải là chuỗi ký tự' })
   notes?: string;
 }
+

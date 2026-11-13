@@ -12,3 +12,4 @@ export class UpdateKitchenBatchStatusDto {
   @IsNotEmpty({ message: 'status không được để trống' })
   status: KitchenItemStatus;
 }
+

@@ -51,3 +51,4 @@ export class CreateOrderBatchDto {
   @IsString({ message: 'customerPhone phải là chuỗi ký tự' })
   customerPhone?: string;
 }
+

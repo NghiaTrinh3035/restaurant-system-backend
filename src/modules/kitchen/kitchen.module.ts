@@ -12,3 +12,4 @@ import { PickupOrdersModule } from 'src/modules/pickup-orders/pickup-orders.modu
   exports: [KitchenService],
 })
 export class KitchenModule {}
+

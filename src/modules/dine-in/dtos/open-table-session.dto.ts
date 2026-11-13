@@ -36,3 +36,4 @@ export class OpenTableSessionDto {
   @IsString({ message: 'notes phải là chuỗi ký tự' })
   notes?: string;
 }
+

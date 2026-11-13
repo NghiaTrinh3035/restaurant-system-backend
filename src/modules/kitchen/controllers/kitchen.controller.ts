@@ -77,3 +77,4 @@ export class KitchenController {
     return this.kitchenService.updatePickupOrderStatus(pickupOrderId, status, user);
   }
 }
+

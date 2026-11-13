@@ -102,3 +102,4 @@ model OrderItem {
   @@index([menuItemId])
   @@map("order_items")
 }
+

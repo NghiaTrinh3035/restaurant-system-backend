@@ -20,3 +20,4 @@ export class UpdateKitchenItemStatusDto {
   @IsString({ message: 'cancelledReason phải là chuỗi ký tự' })
   cancelledReason?: string;
 }
+
