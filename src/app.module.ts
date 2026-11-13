@@ -24,6 +24,7 @@ import { KitchenModule } from './modules/kitchen/kitchen.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      expandVariables: true,
       validate,
       load: configs,
     }),
