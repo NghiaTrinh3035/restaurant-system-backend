@@ -376,17 +376,26 @@ export class TablesGateway
   /**
    * Phát sự kiện có đơn đặt bàn mới tạo
    */
-  notifyReservationCreated(branchId: string, reservation: any) {
-    const room = `branch:${branchId}`;
-    this.server.to(room).emit('reservation:created', reservation);
+  private emitReservationEvent(event: string, branchId: string, reservation: any) {
+    let target = this.server.to(`branch:${branchId}`);
+    if (reservation?.userId) {
+      target = target.to(`user:${reservation.userId}`);
+    }
+    target.emit(event, reservation);
   }
 
   /**
-   * Phát sự kiện đơn đặt bàn được cập nhật trạng thái
+   * Phát sự kiện có đơn đặt bàn mới tới màn hình quản lý chi nhánh và tài khoản đặt
+   */
+  notifyReservationCreated(branchId: string, reservation: any) {
+    this.emitReservationEvent('reservation:created', branchId, reservation);
+  }
+
+  /**
+   * Phát sự kiện đơn đặt bàn được cập nhật trạng thái tới chi nhánh và khách hàng sở hữu
    */
   notifyReservationUpdated(branchId: string, reservation: any) {
-    const room = `branch:${branchId}`;
-    this.server.to(room).emit('reservation:updated', reservation);
+    this.emitReservationEvent('reservation:updated', branchId, reservation);
   }
 
   /**

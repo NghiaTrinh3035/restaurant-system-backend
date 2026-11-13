@@ -19,7 +19,40 @@ import type { ICurrentUser } from 'src/core/common/interfaces/current-user.inter
 import { CreateOrderBatchDto } from '../dtos/create-order-batch.dto';
 import { CheckoutInvoiceDto } from '../dtos/checkout-invoice.dto';
 import { OpenTableSessionDto } from '../dtos/open-table-session.dto';
-import { generateInvoiceCode, getLocalNow, toDateOnly } from '../helpers/dine-in.helper';
+import { generateInvoiceCode } from '../helpers/dine-in.helper';
+
+const ACTIVE_INVOICE_STATUSES: InvoiceStatus[] = [
+  InvoiceStatus.OPEN,
+  InvoiceStatus.PAYMENT_PENDING,
+];
+
+const ACTIVE_INVOICE_INCLUDE = {
+  table: { select: { id: true, tableNumber: true, floor: true } },
+  batches: {
+    orderBy: { batchNumber: 'asc' as const },
+    include: {
+      table: { select: { id: true, tableNumber: true, floor: true } },
+      items: {
+        include: {
+          menuItem: {
+            select: { id: true, name: true, price: true, imageUrl: true },
+          },
+        },
+        orderBy: { createdAt: 'asc' as const },
+      },
+    },
+  },
+  reservation: {
+    select: {
+      id: true,
+      reservationCode: true,
+      customerName: true,
+      customerPhone: true,
+      reservationTime: true,
+      guestCount: true,
+    },
+  },
+} satisfies Prisma.InvoiceInclude;
 
 @Injectable()
 export class DineInService {
@@ -29,6 +62,16 @@ export class DineInService {
     private readonly prisma: PrismaService,
     private readonly tablesGateway: TablesGateway,
   ) {}
+
+  private async findActiveInvoiceByTable(tableId: string) {
+    return this.prisma.invoice.findFirst({
+      where: {
+        tableId,
+        status: { in: ACTIVE_INVOICE_STATUSES },
+      },
+      include: ACTIVE_INVOICE_INCLUDE,
+    });
+  }
 
   /**
    * Khách hoặc phục vụ quét QR tại bàn:
@@ -58,61 +101,10 @@ export class DineInService {
       throw new NotFoundException('Bàn ăn không tồn tại hoặc đã ngừng hoạt động.');
     }
 
-    const now = getLocalNow();
-    const today = toDateOnly(now.date);
-
-    // 1. Tìm hóa đơn đang mở trên bàn
-    let activeInvoice = await this.prisma.invoice.findFirst({
-      where: {
-        tableId,
-        status: { in: [InvoiceStatus.OPEN, InvoiceStatus.PAYMENT_PENDING] },
-      },
-      include: {
-        batches: {
-          orderBy: { batchNumber: 'asc' },
-          include: {
-            items: {
-              include: {
-                menuItem: {
-                  select: { id: true, name: true, price: true, imageUrl: true },
-                },
-              },
-              orderBy: { createdAt: 'asc' },
-            },
-          },
-        },
-        reservation: {
-          select: {
-            id: true,
-            reservationCode: true,
-            customerName: true,
-            customerPhone: true,
-            reservationTime: true,
-            guestCount: true,
-          },
-        },
-      },
-    });
-
-    // 2. Nếu chưa có hóa đơn mở nhưng bàn đang có lượt khách SEATED hôm nay -> tự động mở hóa đơn
-    if (!activeInvoice) {
-      const seatedReservation = await this.prisma.reservation.findFirst({
-        where: {
-          tableId,
-          reservationDate: today,
-          status: ReservationStatus.SEATED,
-        },
-        include: {
-          orders: {
-            include: { menuItem: true },
-          },
-        },
-      });
-
-      if (seatedReservation) {
-        activeInvoice = await this.createInvoiceForSeatedReservation(table, seatedReservation);
-      }
-    }
+    // 1. Tìm hóa đơn đang mở trên bàn; nếu chưa có nhưng có lượt đặt bàn SEATED -> tự mở hóa đơn & đồng bộ món đặt trước xuống Bếp
+    const activeInvoice =
+      (await this.findActiveInvoiceByTable(tableId)) ||
+      (await this.ensureInvoiceForSeatedReservation(tableId));
 
     // 3. Lấy thực đơn chi nhánh đang hoạt động
     const branchMenuItems = await this.prisma.branchMenuItem.findMany({
@@ -264,13 +256,17 @@ export class DineInService {
       throw new ForbiddenException('Bạn không có quyền thao tác trên bàn của chi nhánh khác.');
     }
 
-    // Tìm hóa đơn đang mở, nếu chưa có thì tự động tạo hóa đơn mới
+    // Tìm hóa đơn đang mở (ưu tiên hóa đơn gắn với lượt đặt bàn SEATED nếu chưa mở), nếu vẫn chưa có thì tạo phiên vãng lai
     let invoice = await this.prisma.invoice.findFirst({
       where: {
         tableId,
-        status: InvoiceStatus.OPEN,
+        status: { in: ACTIVE_INVOICE_STATUSES },
       },
     });
+
+    if (!invoice) {
+      invoice = await this.ensureInvoiceForSeatedReservation(tableId);
+    }
 
     if (!invoice) {
       invoice = await this.openTableSession(
@@ -576,28 +572,39 @@ export class DineInService {
   }
 
   /**
-   * Helper nội bộ: Tự động tạo Invoice cho đơn đặt bàn SEATED nếu khách chưa có Invoice
+   * Đảm bảo bàn đang có lượt khách đặt bàn SEATED đã có Invoice mở và đồng bộ món đặt trước xuống Bếp (Đợt #1).
+   * Có thể gọi từ ReservationsService ngay khi nhấn "Vào bàn" hoặc từ DineInService khi quét QR / gọi thêm món.
    */
-  private async createInvoiceForSeatedReservation(
-    table: { id: string; branchId: string },
-    reservation: {
-      id: string;
-      userId?: string | null;
-      customerName: string;
-      customerPhone?: string | null;
-      guestCount: number;
-      orders?: Array<{
-        menuItemId: string;
-        quantity: number;
-        unitPrice: Prisma.Decimal | number;
-        note?: string | null;
-      }>;
-    },
-  ) {
+  async ensureInvoiceForSeatedReservation(tableId: string, reservationId?: string) {
+    const existingByTable = await this.findActiveInvoiceByTable(tableId);
+    if (existingByTable) {
+      return existingByTable;
+    }
+
+    const table = await this.prisma.restaurantTable.findUnique({
+      where: { id: tableId },
+      select: { id: true, branchId: true, tableNumber: true, floor: true },
+    });
+    if (!table) return null;
+
+    const seatedReservation = await this.prisma.reservation.findFirst({
+      where: reservationId
+        ? { id: reservationId, tableId, status: ReservationStatus.SEATED }
+        : { tableId, status: ReservationStatus.SEATED },
+      orderBy: { updatedAt: 'desc' },
+      include: {
+        orders: {
+          include: { menuItem: true },
+        },
+      },
+    });
+
+    if (!seatedReservation) return null;
+
     const invoiceCode = generateInvoiceCode();
 
     let preOrderSubtotal = 0;
-    const ordersList = reservation.orders || [];
+    const ordersList = seatedReservation.orders || [];
     const preOrderItems = ordersList.map((o) => {
       const price = Number(o.unitPrice);
       const subtotal = price * o.quantity;
@@ -611,23 +618,36 @@ export class DineInService {
       };
     });
 
-    return this.prisma.$transaction(async (tx) => {
+    const { invoice, createdBatch } = await this.prisma.$transaction(async (tx) => {
+      // Bảo vệ chống tạo trùng khi 2 request đến đồng thời
+      const concurrent = await tx.invoice.findFirst({
+        where: {
+          tableId,
+          status: { in: ACTIVE_INVOICE_STATUSES },
+        },
+        include: ACTIVE_INVOICE_INCLUDE,
+      });
+      if (concurrent) {
+        return { invoice: concurrent, createdBatch: null };
+      }
+
       const inv = await tx.invoice.create({
         data: {
           invoiceCode,
           branchId: table.branchId,
           tableId: table.id,
-          reservationId: reservation.id,
-          userId: reservation.userId || null,
-          customerName: reservation.customerName,
-          customerPhone: reservation.customerPhone,
-          guestCount: reservation.guestCount,
+          reservationId: seatedReservation.id,
+          userId: seatedReservation.userId || null,
+          customerName: seatedReservation.customerName,
+          customerPhone: seatedReservation.customerPhone,
+          guestCount: seatedReservation.guestCount,
           subtotal: preOrderSubtotal,
           finalAmount: preOrderSubtotal,
           status: InvoiceStatus.OPEN,
         },
       });
 
+      let batch1Id: string | null = null;
       if (preOrderItems.length > 0) {
         const batch = await tx.orderBatch.create({
           data: {
@@ -639,6 +659,7 @@ export class DineInService {
             note: 'Đợt 1 (Món đặt trước)',
           },
         });
+        batch1Id = batch.id;
 
         await tx.orderItem.createMany({
           data: preOrderItems.map((item) => ({
@@ -649,17 +670,82 @@ export class DineInService {
         });
       }
 
-      return tx.invoice.findUnique({
+      const fullInvoice = await tx.invoice.findUnique({
         where: { id: inv.id },
-        include: {
-          batches: {
-            include: {
-              items: { include: { menuItem: true } },
-            },
-          },
-          reservation: true,
+        include: ACTIVE_INVOICE_INCLUDE,
+      });
+
+      const batch1 = batch1Id
+        ? fullInvoice?.batches.find((b) => b.id === batch1Id) || null
+        : null;
+
+      return { invoice: fullInvoice, createdBatch: batch1 };
+    });
+
+    if (invoice) {
+      try {
+        if (createdBatch) {
+          this.tablesGateway.notifyKitchenNewBatch(table.branchId, {
+            batch: createdBatch,
+            table: { id: table.id, tableNumber: table.tableNumber, floor: table.floor },
+            invoiceId: invoice.id,
+          });
+          this.tablesGateway.notifyTableOrderBatchCreated(table.branchId, table.id, {
+            batch: createdBatch,
+            invoice,
+          });
+        }
+        this.tablesGateway.notifyTableBillUpdated(table.branchId, table.id, invoice);
+      } catch {
+        // Bỏ qua lỗi socket
+      }
+    }
+
+    return invoice;
+  }
+
+  /**
+   * Đóng các hóa đơn còn mở gắn với một Reservation khi đơn kết thúc (COMPLETED/CANCELLED/NO_SHOW),
+   * tránh kẹt hóa đơn cũ cho lượt khách tiếp theo ngồi cùng bàn.
+   */
+  async closeOrFinalizeReservationInvoices(
+    reservationId: string,
+    outcome: 'COMPLETED' | 'CANCELLED',
+  ) {
+    const openInvoices = await this.prisma.invoice.findMany({
+      where: {
+        reservationId,
+        status: { in: ACTIVE_INVOICE_STATUSES },
+      },
+      include: { batches: { select: { id: true } } },
+    });
+
+    for (const inv of openInvoices) {
+      const nextStatus =
+        outcome === 'COMPLETED' && inv.batches.length > 0
+          ? InvoiceStatus.PAID
+          : InvoiceStatus.CANCELLED;
+
+      const updated = await this.prisma.invoice.update({
+        where: { id: inv.id },
+        data: {
+          status: nextStatus,
+          ...(nextStatus === InvoiceStatus.PAID && !inv.paymentMethod
+            ? { paymentMethod: 'CASH' }
+            : {}),
+          closedAt: new Date(),
         },
       });
-    });
+
+      try {
+        this.tablesGateway.notifyTableInvoiceClosed(inv.branchId, inv.tableId, {
+          invoiceId: updated.id,
+          invoiceCode: updated.invoiceCode,
+          finalAmount: Number(updated.finalAmount),
+        });
+      } catch {
+        // Bỏ qua lỗi socket
+      }
+    }
   }
 }

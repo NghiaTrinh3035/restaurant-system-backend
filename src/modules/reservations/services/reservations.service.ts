@@ -11,7 +11,13 @@ import { CreateReservationDto, PreOrderItemDto } from '../dto/create-reservation
 import { QueryReservationDto } from '../dto/query-reservation.dto';
 import { QueryMyReservationsDto, ReservationTimeline } from '../dto/query-my-reservations.dto';
 import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
-import { ReservationStatus, RestaurantTableStatus, Prisma, Role } from '@prisma/client';
+import {
+  InvoiceStatus,
+  ReservationStatus,
+  RestaurantTableStatus,
+  Prisma,
+  Role,
+} from '@prisma/client';
 import { TablesService } from 'src/modules/tables/services/tables.service';
 import { UpdateReservationStatusDto } from '../dto/update-reservation-status.dto';
 import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
@@ -28,13 +34,37 @@ import {
 import { ReservationAvailabilityService } from './reservation-availability.service';
 
 import { MailService } from 'src/mail/mail.service';
+import { DineInService } from 'src/modules/dine-in/services/dine-in.service';
 import { Logger } from '@nestjs/common';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const RESERVATION_WITH_INVOICE_INCLUDE = {
+  branch: { select: { id: true, name: true, phone: true, streetAddress: true } },
+  tableType: true,
+  table: true,
+  orders: { include: { menuItem: true } },
+  invoices: {
+    where: { status: { not: InvoiceStatus.CANCELLED } },
+    orderBy: { createdAt: 'desc' as const },
+    take: 1,
+    include: {
+      batches: {
+        orderBy: { batchNumber: 'asc' as const },
+        include: {
+          items: {
+            include: { menuItem: { select: { id: true, name: true, imageUrl: true } } },
+            orderBy: { createdAt: 'asc' as const },
+          },
+        },
+      },
+    },
+  },
+} satisfies Prisma.ReservationInclude;
 
 const EDITABLE_STATUSES: ReservationStatus[] = [ReservationStatus.PENDING, ReservationStatus.CONFIRMED];
 const ORDER_ALLOWED_STATUSES: ReservationStatus[] = [
   ReservationStatus.PENDING,
   ReservationStatus.CONFIRMED,
-  ReservationStatus.SEATED,
 ];
 
 @Injectable()
@@ -48,6 +78,7 @@ export class ReservationsService {
     private readonly tablesGateway: TablesGateway,
     private readonly tablesService: TablesService,
     private readonly mailService: MailService,
+    private readonly dineInService: DineInService,
   ) {}
 
   async createReservation(dto: CreateReservationDto, user?: ICurrentUser) {
@@ -258,12 +289,7 @@ export class ReservationsService {
         skip,
         take: limit,
         orderBy: [{ reservationDate: 'desc' }, { reservationTime: 'desc' }],
-        include: {
-          branch: { select: { id: true, name: true, phone: true, streetAddress: true } },
-          tableType: true,
-          table: true,
-          orders: { include: { menuItem: true } },
-        },
+        include: RESERVATION_WITH_INVOICE_INCLUDE,
       }),
       this.prisma.reservation.count({ where }),
     ]);
@@ -287,13 +313,21 @@ export class ReservationsService {
     ];
 
     if (query.timeline === ReservationTimeline.UPCOMING) {
-      where.status = { in: [ReservationStatus.PENDING, ReservationStatus.CONFIRMED] };
-      where.reservationDate = { gte: todayStart };
+      where.OR = [
+        {
+          status: { in: [ReservationStatus.PENDING, ReservationStatus.CONFIRMED] },
+          reservationDate: { gte: todayStart },
+        },
+        { status: ReservationStatus.SEATED },
+      ];
       orderBy = [{ reservationDate: 'asc' }, { reservationTime: 'asc' }];
     } else if (query.timeline === ReservationTimeline.PAST) {
       where.OR = [
-        { status: { in: [ReservationStatus.SEATED, ReservationStatus.COMPLETED, ReservationStatus.CANCELLED, ReservationStatus.NO_SHOW] } },
-        { reservationDate: { lt: todayStart } },
+        { status: { in: [ReservationStatus.COMPLETED, ReservationStatus.CANCELLED, ReservationStatus.NO_SHOW] } },
+        {
+          reservationDate: { lt: todayStart },
+          status: { not: ReservationStatus.SEATED },
+        },
       ];
       orderBy = [{ reservationDate: 'desc' }, { reservationTime: 'desc' }];
     }
@@ -308,12 +342,7 @@ export class ReservationsService {
         skip,
         take: limit,
         orderBy,
-        include: {
-          branch: { select: { id: true, name: true, phone: true, streetAddress: true } },
-          tableType: true,
-          table: true,
-          orders: { include: { menuItem: true } },
-        },
+        include: RESERVATION_WITH_INVOICE_INCLUDE,
       }),
       this.prisma.reservation.count({ where }),
     ]);
@@ -345,15 +374,18 @@ export class ReservationsService {
   }
 
   async getReservationById(id: string, user?: ICurrentUser) {
+    const orConditions: Prisma.ReservationWhereInput[] = [{ reservationCode: id }];
+    if (UUID_REGEX.test(id)) {
+      orConditions.unshift({ id });
+    }
+
     const reservation = await this.prisma.reservation.findFirst({
       where: {
-        OR: [{ id: id.includes('-') && id.length === 36 ? id : undefined }, { reservationCode: id }],
+        OR: orConditions,
       },
       include: {
+        ...RESERVATION_WITH_INVOICE_INCLUDE,
         branch: true,
-        tableType: true,
-        table: true,
-        orders: { include: { menuItem: true } },
       },
     });
 
@@ -435,6 +467,12 @@ export class ReservationsService {
 
     if (user && user.role === Role.STAFF && user.branchId && reservation.branchId !== user.branchId) {
       throw new ForbiddenException('Bạn chỉ có quyền cập nhật món ăn của đơn đặt bàn thuộc chi nhánh của mình.');
+    }
+
+    if (reservation.status === ReservationStatus.SEATED) {
+      throw new BadRequestException(
+        'Khách đã nhận bàn, vui lòng gọi thêm món theo đợt tại bàn để chuyển thẳng xuống nhà bếp.',
+      );
     }
 
     if (!ORDER_ALLOWED_STATUSES.includes(reservation.status)) {
@@ -554,7 +592,7 @@ export class ReservationsService {
       }
     }
 
-    // Nếu chuyển sang SEATED và có bàn -> Tự động đổi bàn sang OCCUPIED
+    // Nếu chuyển sang SEATED và có bàn -> Tự động đổi bàn sang OCCUPIED & mở Invoice + gửi món đặt trước xuống Bếp
     if (dto.status === ReservationStatus.SEATED && targetTableId) {
       try {
         await this.tablesService.updateTableStatus(
@@ -562,40 +600,56 @@ export class ReservationsService {
           { status: RestaurantTableStatus.OCCUPIED, note: `Khách ${reservation.customerName} đang dùng bữa` },
           user,
         );
-      } catch (err) {
+      } catch {
         // Tiếp tục dù lỗi socket
+      }
+      try {
+        await this.dineInService.ensureInvoiceForSeatedReservation(targetTableId, updated.id);
+      } catch (err) {
+        this.logger.error(`[DineIn] Không thể mở hóa đơn khi nhận bàn cho ${updated.reservationCode}:`, err);
       }
     }
 
-    // Nếu chuyển sang COMPLETED và có bàn -> Tự động đổi bàn sang DIRTY để đưa vào hàng chờ dọn dẹp
-    if (dto.status === ReservationStatus.COMPLETED && targetTableId) {
+    // Nếu chuyển sang COMPLETED -> Đổi bàn sang DIRTY & đóng hóa đơn còn mở gắn với đơn đặt bàn
+    if (dto.status === ReservationStatus.COMPLETED) {
       try {
-        await this.tablesService.updateTableStatus(
-          targetTableId,
-          { status: RestaurantTableStatus.DIRTY, note: `Khách vừa dùng bữa xong (${reservation.reservationCode})` },
-          user,
-        );
+        await this.dineInService.closeOrFinalizeReservationInvoices(updated.id, 'COMPLETED');
       } catch (err) {
-        // Tiếp tục dù lỗi socket
+        this.logger.error(`[DineIn] Không thể chốt hóa đơn cho đơn ${updated.reservationCode}:`, err);
       }
-    }
-
-    // Nếu bị CANCELLED hoặc NO_SHOW và bàn đang OCCUPIED -> giải phóng về AVAILABLE
-    if (
-      (dto.status === ReservationStatus.CANCELLED || dto.status === ReservationStatus.NO_SHOW) &&
-      targetTableId
-    ) {
-      try {
-        const currentTable = await this.prisma.restaurantTable.findUnique({ where: { id: targetTableId } });
-        if (currentTable && currentTable.status === RestaurantTableStatus.OCCUPIED) {
+      if (targetTableId) {
+        try {
           await this.tablesService.updateTableStatus(
             targetTableId,
-            { status: RestaurantTableStatus.AVAILABLE, note: `Giải phóng bàn sau khi hủy đơn ${reservation.reservationCode}` },
+            { status: RestaurantTableStatus.DIRTY, note: `Khách vừa dùng bữa xong (${reservation.reservationCode})` },
             user,
           );
+        } catch {
+          // Tiếp tục dù lỗi socket
         }
+      }
+    }
+
+    // Nếu bị CANCELLED hoặc NO_SHOW -> Hủy hóa đơn mở nếu có & giải phóng bàn về AVAILABLE nếu đang OCCUPIED
+    if (dto.status === ReservationStatus.CANCELLED || dto.status === ReservationStatus.NO_SHOW) {
+      try {
+        await this.dineInService.closeOrFinalizeReservationInvoices(updated.id, 'CANCELLED');
       } catch (err) {
-        // Tiếp tục dù lỗi socket
+        this.logger.error(`[DineIn] Không thể hủy hóa đơn cho đơn ${updated.reservationCode}:`, err);
+      }
+      if (targetTableId) {
+        try {
+          const currentTable = await this.prisma.restaurantTable.findUnique({ where: { id: targetTableId } });
+          if (currentTable && currentTable.status === RestaurantTableStatus.OCCUPIED) {
+            await this.tablesService.updateTableStatus(
+              targetTableId,
+              { status: RestaurantTableStatus.AVAILABLE, note: `Giải phóng bàn sau khi hủy đơn ${reservation.reservationCode}` },
+              user,
+            );
+          }
+        } catch {
+          // Tiếp tục dù lỗi socket
+        }
       }
     }
 
