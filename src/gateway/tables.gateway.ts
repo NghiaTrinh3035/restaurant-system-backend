@@ -149,6 +149,94 @@ export class TablesGateway
   }
 
   /**
+   * Màn hình Bếp tham gia vào Room bếp chi nhánh: `kitchen:branch:{branchId}`
+   */
+  @SubscribeMessage('kitchen:join')
+  async handleJoinKitchen(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() dto: { branchId: string },
+  ) {
+    if (!dto || !dto.branchId) {
+      client.emit('error', { message: 'branchId là bắt buộc khi tham gia room bếp' });
+      return;
+    }
+
+    const room = `kitchen:branch:${dto.branchId}`;
+    await client.join(room);
+    this.logger.log(`Kitchen client ${client.id} joined room ${room}`);
+
+    client.emit('kitchen:joined', {
+      branchId: dto.branchId,
+      room,
+      message: 'Đã kết nối vào màn hình bếp chi nhánh thành công.',
+    });
+  }
+
+  /**
+   * Màn hình Bếp rời khỏi Room bếp chi nhánh
+   */
+  @SubscribeMessage('kitchen:leave')
+  async handleLeaveKitchen(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() dto: { branchId: string },
+  ) {
+    if (!dto || !dto.branchId) return;
+
+    const room = `kitchen:branch:${dto.branchId}`;
+    await client.leave(room);
+    this.logger.log(`Kitchen client ${client.id} left room ${room}`);
+
+    client.emit('kitchen:left', {
+      branchId: dto.branchId,
+      room,
+    });
+  }
+
+  /**
+   * Khách hàng quét QR hoặc phục vụ tham gia vào Room riêng của bàn ăn: `table:{tableId}`
+   */
+  @SubscribeMessage('table:join')
+  async handleJoinTable(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() dto: { tableId: string },
+  ) {
+    if (!dto || !dto.tableId) {
+      client.emit('error', { message: 'tableId là bắt buộc khi tham gia room bàn' });
+      return;
+    }
+
+    const room = `table:${dto.tableId}`;
+    await client.join(room);
+    this.logger.log(`Table client ${client.id} joined room ${room}`);
+
+    client.emit('table:joined', {
+      tableId: dto.tableId,
+      room,
+      message: 'Đã kết nối vào kênh bàn ăn thành công.',
+    });
+  }
+
+  /**
+   * Rời khỏi Room bàn ăn
+   */
+  @SubscribeMessage('table:leave')
+  async handleLeaveTable(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() dto: { tableId: string },
+  ) {
+    if (!dto || !dto.tableId) return;
+
+    const room = `table:${dto.tableId}`;
+    await client.leave(room);
+    this.logger.log(`Table client ${client.id} left room ${room}`);
+
+    client.emit('table:left', {
+      tableId: dto.tableId,
+      room,
+    });
+  }
+
+  /**
    * Giữ bàn tạm thời (Table Lock) cho một khung giờ - Khách hàng chọn bàn trong lúc đặt chỗ
    */
   @SubscribeMessage('table:lock')
@@ -294,5 +382,72 @@ export class TablesGateway
   notifyReservationUpdated(branchId: string, reservation: any) {
     const room = `branch:${branchId}`;
     this.server.to(room).emit('reservation:updated', reservation);
+  }
+
+  /**
+   * Phát sự kiện đợt gọi món mới gửi xuống màn hình Bếp chi nhánh
+   */
+  notifyKitchenNewBatch(branchId: string, batchData: any) {
+    const kitchenRoom = `kitchen:branch:${branchId}`;
+    this.server.to(kitchenRoom).emit('kitchen:new_batch', batchData);
+  }
+
+  /**
+   * Phát sự kiện cập nhật trạng thái món ăn từ Bếp (QUEUED -> PREPARING -> READY -> SERVED)
+   */
+  notifyKitchenItemStatusChanged(branchId: string, tableId: string, itemData: any) {
+    const kitchenRoom = `kitchen:branch:${branchId}`;
+    const branchRoom = `branch:${branchId}`;
+    const tableRoom = `table:${tableId}`;
+
+    this.server.to(kitchenRoom).emit('kitchen:item_updated', itemData);
+    this.server.to(branchRoom).emit('kitchen:item_updated', itemData);
+    if (tableId) {
+      this.server.to(tableRoom).emit('table:item_status_changed', itemData);
+    }
+  }
+
+  /**
+   * Phát sự kiện bàn vừa gửi thêm đợt món mới
+   */
+  notifyTableOrderBatchCreated(branchId: string, tableId: string, data: any) {
+    const branchRoom = `branch:${branchId}`;
+    const tableRoom = `table:${tableId}`;
+
+    this.server.to(branchRoom).emit('table:batch_created', data);
+    this.server.to(tableRoom).emit('table:batch_created', data);
+  }
+
+  /**
+   * Phát sự kiện hóa đơn tạm tính của bàn được cập nhật
+   */
+  notifyTableBillUpdated(branchId: string, tableId: string, invoiceData: any) {
+    const branchRoom = `branch:${branchId}`;
+    const tableRoom = `table:${tableId}`;
+
+    this.server.to(branchRoom).emit('table:bill_updated', invoiceData);
+    this.server.to(tableRoom).emit('table:bill_updated', invoiceData);
+  }
+
+  /**
+   * Phát sự kiện khách tại bàn nhấn yêu cầu thanh toán
+   */
+  notifyTablePaymentRequested(branchId: string, tableId: string, data: any) {
+    const branchRoom = `branch:${branchId}`;
+    const tableRoom = `table:${tableId}`;
+
+    this.server.to(branchRoom).emit('table:payment_requested', data);
+    this.server.to(tableRoom).emit('table:payment_requested', data);
+  }
+
+  /**
+   * Phát sự kiện hóa đơn bàn đã thanh toán xong
+   */
+  notifyTableInvoiceClosed(branchId: string, tableId: string, data: any) {
+    const branchRoom = `branch:${branchId}`;
+    const tableRoom = `table:${tableId}`;
+
+    this.server.to(branchRoom).emit('table:invoice_closed', data);
+    this.server.to(tableRoom).emit('table:invoice_closed', data);
   }
 }

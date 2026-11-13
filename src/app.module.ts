@@ -17,6 +17,8 @@ import { JwtAuthGuard } from './core/common/guards/jwt-auth.guard';
 import { AuthJwtModule } from './core/security/jwt/jwt.module';
 import { GatewayModule } from './gateway/gateway.module';
 import { PickupOrdersModule } from './modules/pickup-orders/pickup-orders.module';
+import { DineInModule } from './modules/dine-in/dine-in.module';
+import { KitchenModule } from './modules/kitchen/kitchen.module';
 
 @Module({
   imports: [
@@ -50,6 +52,8 @@ import { PickupOrdersModule } from './modules/pickup-orders/pickup-orders.module
     AuthJwtModule,
     GatewayModule,
     PickupOrdersModule,
+    DineInModule,
+    KitchenModule,
   ],
   controllers: [],
   providers: [
