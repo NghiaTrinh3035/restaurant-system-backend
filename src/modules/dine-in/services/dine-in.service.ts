@@ -10,6 +10,9 @@ import { TablesGateway } from 'src/gateway/tables.gateway';
 import {
   InvoiceStatus,
   KitchenItemStatus,
+  PaymentProvider,
+  PaymentPurpose,
+  PaymentStatus,
   Prisma,
   ReservationStatus,
   RestaurantTableStatus,
@@ -20,6 +23,8 @@ import { CreateOrderBatchDto } from '../dtos/create-order-batch.dto';
 import { CheckoutInvoiceDto } from '../dtos/checkout-invoice.dto';
 import { OpenTableSessionDto } from '../dtos/open-table-session.dto';
 import { generateInvoiceCode } from '../helpers/dine-in.helper';
+import { generateTransactionCode } from 'src/modules/payments/helpers/payment-crypto.helper';
+import { computeBatchesFoodTotal } from 'src/modules/reservations/helpers/reservation-bill.helper';
 
 const ACTIVE_INVOICE_STATUSES: InvoiceStatus[] = [
   InvoiceStatus.OPEN,
@@ -467,6 +472,7 @@ export class DineInService {
       include: {
         table: true,
         reservation: true,
+        batches: { include: { items: true } },
       },
     });
 
@@ -482,46 +488,108 @@ export class DineInService {
       throw new BadRequestException('Hóa đơn này đã được thanh toán hoặc đã bị hủy trước đó.');
     }
 
-    const subtotal = Number(invoice.subtotal);
+    const subtotal =
+      invoice.batches.length > 0
+        ? computeBatchesFoodTotal(invoice.batches)
+        : Number(invoice.subtotal);
     const discountAmount = dto.discountAmount || 0;
     const finalAmount = Math.max(0, subtotal - discountAmount);
+    const now = new Date();
 
-    const updatedInvoice = await this.prisma.$transaction(async (tx) => {
-      const inv = await tx.invoice.update({
-        where: { id: invoiceId },
-        data: {
-          status: InvoiceStatus.PAID,
-          paymentMethod: dto.paymentMethod,
-          discountAmount,
-          finalAmount,
-          notes: dto.notes?.trim() || invoice.notes,
-          closedAt: new Date(),
-        },
-        include: {
-          table: true,
-          batches: { include: { items: { include: { menuItem: true } } } },
-        },
-      });
-
-      // Chuyển bàn sang DIRTY để đưa vào hàng chờ dọn
-      await tx.restaurantTable.update({
-        where: { id: invoice.tableId },
-        data: {
-          status: RestaurantTableStatus.DIRTY,
-          note: `Khách vừa thanh toán xong (${invoice.invoiceCode})`,
-        },
-      });
-
-      // Nếu hóa đơn này gắn với đơn đặt bàn SEATED -> chuyển đơn đặt bàn sang COMPLETED
-      if (invoice.reservationId) {
-        await tx.reservation.update({
-          where: { id: invoice.reservationId },
-          data: { status: ReservationStatus.COMPLETED },
+    const { updatedInvoice, updatedReservation, settlementTx } = await this.prisma.$transaction(
+      async (tx) => {
+        const inv = await tx.invoice.update({
+          where: { id: invoiceId },
+          data: {
+            status: InvoiceStatus.PAID,
+            paymentMethod: dto.paymentMethod,
+            subtotal,
+            discountAmount,
+            finalAmount,
+            notes: dto.notes?.trim() || invoice.notes,
+            closedAt: now,
+          },
+          include: {
+            table: true,
+            batches: { include: { items: { include: { menuItem: true } } } },
+          },
         });
-      }
 
-      return inv;
-    });
+        // Chuyển bàn sang DIRTY để đưa vào hàng chờ dọn
+        await tx.restaurantTable.update({
+          where: { id: invoice.tableId },
+          data: {
+            status: RestaurantTableStatus.DIRTY,
+            note: `Khách vừa thanh toán xong (${invoice.invoiceCode})`,
+          },
+        });
+
+        let completedReservation: {
+          id: string;
+          status: ReservationStatus;
+          userId: string | null;
+        } | null = null;
+        let recordedSettlement: {
+          transactionCode: string;
+          provider: PaymentProvider;
+          amount: number;
+        } | null = null;
+
+        // Nếu hóa đơn này gắn với đơn đặt bàn SEATED -> ghi nhận quyết toán còn lại (sau khi trừ cọc) & chuyển đơn đặt bàn sang COMPLETED
+        if (invoice.reservationId) {
+          const paidTransactions = await tx.paymentTransaction.findMany({
+            where: {
+              reservationId: invoice.reservationId,
+              status: PaymentStatus.SUCCESS,
+            },
+            select: { purpose: true, amount: true },
+          });
+
+          const alreadyPaid = paidTransactions.reduce((sum, p) => sum + Number(p.amount), 0);
+          const remainingToPay = Math.max(0, finalAmount - alreadyPaid);
+
+          if (remainingToPay > 0) {
+            const normalizedProvider =
+              dto.paymentMethod === 'MOMO'
+                ? PaymentProvider.MOMO
+                : dto.paymentMethod === 'VNPAY'
+                  ? PaymentProvider.VNPAY
+                  : PaymentProvider.CASH;
+            const transactionCode = generateTransactionCode(normalizedProvider);
+
+            await tx.paymentTransaction.create({
+              data: {
+                transactionCode,
+                provider: normalizedProvider,
+                purpose: PaymentPurpose.RESERVATION_SETTLEMENT,
+                status: PaymentStatus.SUCCESS,
+                amount: remainingToPay,
+                reservationId: invoice.reservationId,
+                userId: invoice.reservation?.userId ?? null,
+                paidAt: now,
+                expiresAt: now,
+              },
+            });
+            recordedSettlement = {
+              transactionCode,
+              provider: normalizedProvider,
+              amount: remainingToPay,
+            };
+          }
+
+          completedReservation = await tx.reservation.update({
+            where: { id: invoice.reservationId },
+            data: { status: ReservationStatus.COMPLETED },
+          });
+        }
+
+        return {
+          updatedInvoice: inv,
+          updatedReservation: completedReservation,
+          settlementTx: recordedSettlement,
+        };
+      },
+    );
 
     const dirtySince = Date.now();
     try {
@@ -538,6 +606,25 @@ export class DineInService {
         invoiceCode: updatedInvoice.invoiceCode,
         finalAmount,
       });
+
+      if (updatedReservation && invoice.reservationId) {
+        this.tablesGateway.server?.to(`branch:${invoice.branchId}`).emit('reservation:statusChanged', {
+          id: invoice.reservationId,
+          status: ReservationStatus.COMPLETED,
+        });
+        this.tablesGateway.notifyReservationUpdated(invoice.branchId, updatedReservation);
+      }
+
+      if (settlementTx && invoice.reservationId) {
+        this.tablesGateway.notifyPaymentUpdated(invoice.branchId, {
+          transactionCode: settlementTx.transactionCode,
+          provider: settlementTx.provider,
+          purpose: PaymentPurpose.RESERVATION_SETTLEMENT,
+          status: PaymentStatus.SUCCESS,
+          amount: settlementTx.amount,
+          reservationId: invoice.reservationId,
+        });
+      }
     } catch {
       // Bỏ qua lỗi socket
     }

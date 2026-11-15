@@ -38,19 +38,26 @@ export class PickupOrdersService {
   private buildQrPayload(order: {
     orderCode: string;
     branchId: string;
-    pickupDate: Date;
-    pickupTime: string;
-    customerPhone: string;
-    customerName: string;
+    pickupDate?: Date | string | null;
+    pickupTime?: string | null;
+    customerPhone?: string | null;
+    customerName?: string | null;
   }): string {
+    const dateStr =
+      order.pickupDate instanceof Date
+        ? order.pickupDate.toISOString().split('T')[0]
+        : order.pickupDate
+          ? String(order.pickupDate).split('T')[0]
+          : '';
+
     return JSON.stringify({
       type: 'PICKUP',
       code: order.orderCode,
       branchId: order.branchId,
-      date: order.pickupDate.toISOString().split('T')[0],
-      time: order.pickupTime,
-      phone: order.customerPhone,
-      name: order.customerName,
+      date: dateStr,
+      time: order.pickupTime ?? '',
+      phone: order.customerPhone ?? '',
+      name: order.customerName ?? '',
     });
   }
 
@@ -64,7 +71,6 @@ export class PickupOrdersService {
     return { OR: orConditions };
   }
 
-  async createPickupOrder(dto: CreatePickupOrderDto, user?: ICurrentUser) {
   async createPickupOrder(
     dto: CreatePickupOrderDto,
     user?: ICurrentUser,
@@ -460,14 +466,13 @@ export class PickupOrdersService {
     });
 
     try {
-      this.tablesGateway.notifyPickupOrderEvent('pickupOrder:statusChanged', updated);
       await this.paymentsService.markRefunded({ pickupOrderId: order.id }, refundReason);
     } catch (err) {
       this.logger.error(`[Refund] Hoàn tiền thất bại cho đơn ${order.orderCode}:`, err);
     }
 
     try {
-      this.tablesGateway.server?.to(`branch:${order.branchId}`).emit('pickupOrder:statusChanged', updated);
+      this.tablesGateway.notifyPickupOrderEvent('pickupOrder:statusChanged', updated);
     } catch {
       // Bỏ qua lỗi socket
     }

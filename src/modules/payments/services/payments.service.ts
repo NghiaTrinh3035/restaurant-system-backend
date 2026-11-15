@@ -9,6 +9,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import {
+  InvoiceStatus,
   PaymentProvider,
   PaymentPurpose,
   PaymentStatus,
@@ -25,6 +26,13 @@ import { TablesGateway } from 'src/gateway/tables.gateway';
 import { MailService } from 'src/mail/mail.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { REDIS_CLIENT } from 'src/redis/redis.module';
+import {
+  RESERVATION_BILL_INCLUDE,
+  RESERVATION_INVOICES_BILL_INCLUDE,
+  buildReservationInvoiceMailPayload,
+  computeBatchesFoodTotal,
+  computeReservationBillBreakdown,
+} from 'src/modules/reservations/helpers/reservation-bill.helper';
 import { CreatePaymentDto } from '../dto/create-payment.dto';
 import { QueryPaymentDto } from '../dto/query-payment.dto';
 import { generateTransactionCode, normalizeClientIp } from '../helpers/payment-crypto.helper';
@@ -453,10 +461,11 @@ export class PaymentsService {
     const reservation = await this.prisma.reservation.findUnique({
       where: { id: reservationId },
       include: {
-        orders: true,
+        orders: { include: { menuItem: { select: { id: true, name: true, imageUrl: true } } } },
+        invoices: RESERVATION_INVOICES_BILL_INCLUDE,
         payments: {
           where: { status: PaymentStatus.SUCCESS },
-          select: { id: true, purpose: true, amount: true },
+          select: { id: true, purpose: true, status: true, amount: true },
         },
       },
     });
@@ -474,44 +483,42 @@ export class PaymentsService {
       throw new BadRequestException('Đơn đặt bàn đã hủy hoặc quá hạn, không thể thanh toán.');
     }
 
-    const totalOrderAmount = reservation.orders.reduce(
-      (sum, item) => sum + Number(item.unitPrice) * item.quantity,
-      0,
-    );
-
     if (purpose === PaymentPurpose.RESERVATION_DEPOSIT) {
+      const totalPreOrderAmount = reservation.orders.reduce(
+        (sum, item) => sum + Number(item.unitPrice) * item.quantity,
+        0,
+      );
       if (reservation.status === ReservationStatus.COMPLETED) {
         throw new BadRequestException('Đơn đặt bàn đã kết thúc, không thể thanh toán đặt cọc.');
       }
       if (reservation.payments.some((p) => p.purpose === PaymentPurpose.RESERVATION_DEPOSIT)) {
         throw new ConflictException('Đơn đặt bàn này đã được thanh toán cọc trước đó.');
       }
-      if (totalOrderAmount <= 0) {
+      if (totalPreOrderAmount <= 0) {
         throw new BadRequestException('Đơn đặt bàn chưa có món đặt trước để thanh toán.');
       }
       return {
-        amount: totalOrderAmount,
+        amount: totalPreOrderAmount,
         orderInfo: `Thanh toan dat ban ${reservation.reservationCode}`,
         reservationId: reservation.id,
         pickupOrderId: null,
       };
     }
 
-    if (reservation.payments.some((p) => p.purpose === PaymentPurpose.RESERVATION_SETTLEMENT)) {
+    const breakdown = computeReservationBillBreakdown(reservation);
+    const hasSettlement = reservation.payments.some(
+      (p) => p.purpose === PaymentPurpose.RESERVATION_SETTLEMENT,
+    );
+    if (hasSettlement && breakdown.remainingAmount <= 0) {
       throw new ConflictException('Hóa đơn đặt bàn này đã được quyết toán.');
     }
 
-    const depositPaid = reservation.payments
-      .filter((p) => p.purpose === PaymentPurpose.RESERVATION_DEPOSIT)
-      .reduce((sum, p) => sum + Number(p.amount), 0);
-
-    const remainingAmount = totalOrderAmount - depositPaid;
-    if (remainingAmount <= 0) {
+    if (breakdown.remainingAmount <= 0) {
       throw new BadRequestException('Hóa đơn không có số dư cần thanh toán.');
     }
 
     return {
-      amount: remainingAmount,
+      amount: breakdown.remainingAmount,
       orderInfo: `Quyet toan hoa don ${reservation.reservationCode}`,
       reservationId: reservation.id,
       pickupOrderId: null,
@@ -550,8 +557,8 @@ export class PaymentsService {
       const txRecord = await this.prisma.paymentTransaction.findUnique({
         where: { transactionCode: input.transactionCode },
         include: {
-          pickupOrder: { select: { id: true, branchId: true, status: true } },
-          reservation: { select: { id: true, branchId: true, status: true, tableId: true } },
+          pickupOrder: { select: { id: true, branchId: true, status: true, userId: true } },
+          reservation: { select: { id: true, branchId: true, status: true, tableId: true, userId: true } },
         },
       });
 
@@ -579,9 +586,18 @@ export class PaymentsService {
       const targetStatus = input.isSuccess ? PaymentStatus.SUCCESS : PaymentStatus.FAILED;
       const sanitizedPayload = this.sanitizePayloadForStorage(input.rawPayload);
 
-      let updatedCount = 0;
+      let txResult: {
+        count: number;
+        closedInvoices: Array<{
+          id: string;
+          invoiceCode: string;
+          branchId: string;
+          tableId: string;
+          finalAmount: number;
+        }>;
+      } = { count: 0, closedInvoices: [] };
       try {
-        updatedCount = await this.prisma.$transaction(async (tx) => {
+        txResult = await this.prisma.$transaction(async (tx) => {
           const res = await tx.paymentTransaction.updateMany({
             where: { id: txRecord.id, status: PaymentStatus.PENDING },
             data: {
@@ -594,7 +610,7 @@ export class PaymentsService {
           });
 
           if (res.count === 0) {
-            return 0;
+            return { count: 0, closedInvoices: [] };
           }
 
           if (
@@ -619,6 +635,14 @@ export class PaymentsService {
             });
           }
 
+          const closedInvoices: Array<{
+            id: string;
+            invoiceCode: string;
+            branchId: string;
+            tableId: string;
+            finalAmount: number;
+          }> = [];
+
           if (
             input.isSuccess &&
             txRecord.purpose === PaymentPurpose.RESERVATION_SETTLEMENT &&
@@ -638,9 +662,55 @@ export class PaymentsService {
                 data: { status: RestaurantTableStatus.DIRTY },
               });
             }
+
+            if (tx.invoice) {
+              const openInvoices = await tx.invoice.findMany({
+                where: {
+                  reservationId: txRecord.reservationId,
+                  status: { in: [InvoiceStatus.OPEN, InvoiceStatus.PAYMENT_PENDING] },
+                },
+                include: {
+                  batches: {
+                    include: { items: true },
+                  },
+                },
+              });
+
+              const now = new Date();
+              for (const inv of openInvoices) {
+                const hasBatches = Array.isArray(inv.batches) && inv.batches.length > 0;
+                const nextStatus = hasBatches ? InvoiceStatus.PAID : InvoiceStatus.CANCELLED;
+                const liveFoodTotal = hasBatches
+                  ? computeBatchesFoodTotal(inv.batches)
+                  : Number(inv.subtotal);
+                const finalAmt = Math.max(0, liveFoodTotal - Number(inv.discountAmount || 0));
+
+                const closedInv = await tx.invoice.update({
+                  where: { id: inv.id },
+                  data: {
+                    status: nextStatus,
+                    ...(hasBatches
+                      ? {
+                          subtotal: liveFoodTotal,
+                          finalAmount: finalAmt,
+                          paymentMethod: txRecord.provider,
+                        }
+                      : {}),
+                    closedAt: now,
+                  },
+                });
+                closedInvoices.push({
+                  id: closedInv.id,
+                  invoiceCode: closedInv.invoiceCode,
+                  branchId: closedInv.branchId,
+                  tableId: closedInv.tableId,
+                  finalAmount: Number(closedInv.finalAmount),
+                });
+              }
+            }
           }
 
-          return res.count;
+          return { count: res.count, closedInvoices };
         });
       } catch (err) {
         if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
@@ -652,7 +722,7 @@ export class PaymentsService {
         throw err;
       }
 
-      if (updatedCount === 0) {
+      if (txResult.count === 0) {
         return 'ALREADY_CONFIRMED';
       }
 
@@ -674,6 +744,12 @@ export class PaymentsService {
               id: txRecord.pickupOrderId,
               status: PickupOrderStatus.CONFIRMED,
             });
+            this.tablesGateway.notifyPickupOrderEvent?.('pickupOrder:statusChanged', {
+              id: txRecord.pickupOrderId,
+              branchId,
+              userId: txRecord.pickupOrder?.userId ?? null,
+              status: PickupOrderStatus.CONFIRMED,
+            } as { branchId: string; userId?: string | null });
           }
 
           if (input.isSuccess && txRecord.reservationId) {
@@ -686,15 +762,31 @@ export class PaymentsService {
               id: txRecord.reservationId,
               status: nextStatus,
             });
+            this.tablesGateway.notifyReservationUpdated?.(branchId, {
+              id: txRecord.reservationId,
+              status: nextStatus,
+              userId: txRecord.reservation?.userId ?? null,
+            });
 
-            if (
-              txRecord.purpose === PaymentPurpose.RESERVATION_SETTLEMENT &&
-              txRecord.reservation?.tableId
-            ) {
-              this.tablesGateway.notifyTableStatusChanged(branchId, {
-                tableId: txRecord.reservation.tableId,
-                status: RestaurantTableStatus.DIRTY,
-              });
+            if (txRecord.purpose === PaymentPurpose.RESERVATION_SETTLEMENT) {
+              if (txRecord.reservation?.tableId) {
+                this.tablesGateway.notifyTableStatusChanged(branchId, {
+                  tableId: txRecord.reservation.tableId,
+                  status: RestaurantTableStatus.DIRTY,
+                });
+              }
+
+              for (const closedInv of txResult.closedInvoices) {
+                this.tablesGateway.notifyTableInvoiceClosed?.(
+                  closedInv.branchId,
+                  closedInv.tableId,
+                  {
+                    invoiceId: closedInv.id,
+                    invoiceCode: closedInv.invoiceCode,
+                    finalAmount: closedInv.finalAmount,
+                  },
+                );
+              }
 
               this.sendSettlementInvoiceEmail(
                 txRecord.reservationId,
@@ -729,61 +821,32 @@ export class PaymentsService {
   ) {
     const reservation = await this.prisma.reservation.findUnique({
       where: { id: reservationId },
-      include: {
-        branch: true,
-        table: true,
-        orders: { include: { menuItem: true } },
-        payments: { where: { status: PaymentStatus.SUCCESS } },
-        user: { select: { email: true } },
-      },
+      include: RESERVATION_BILL_INCLUDE,
     });
 
     if (!reservation) return;
     const recipientEmail = reservation.customerEmail || reservation.user?.email;
     if (!recipientEmail) return;
 
-    const totalFoodAmount = reservation.orders.reduce(
-      (sum, o) => sum + Number(o.unitPrice) * o.quantity,
-      0,
+    const breakdown = computeReservationBillBreakdown(reservation);
+
+    await this.mailService.sendReservationInvoiceEmail(
+      recipientEmail,
+      buildReservationInvoiceMailPayload({
+        customerName: reservation.customerName,
+        reservationCode: reservation.reservationCode,
+        reservationDate: reservation.reservationDate,
+        reservationTime: reservation.reservationTime,
+        branch: reservation.branch,
+        table: reservation.table,
+        items: breakdown.items,
+        totalFoodAmount: breakdown.totalFoodAmount,
+        depositAmount: breakdown.depositAmount,
+        settlementAmount,
+        provider,
+        transactionCode,
+      }),
     );
-    const depositAmount = reservation.payments
-      .filter((p) => p.purpose === PaymentPurpose.RESERVATION_DEPOSIT)
-      .reduce((sum, p) => sum + Number(p.amount), 0);
-
-    const dateStr =
-      reservation.reservationDate instanceof Date
-        ? reservation.reservationDate.toISOString().slice(0, 10)
-        : String(reservation.reservationDate).slice(0, 10);
-
-    const providerLabel =
-      provider === PaymentProvider.MOMO
-        ? 'Ví MoMo'
-        : provider === PaymentProvider.VNPAY
-          ? 'Cổng VNPay'
-          : 'Tiền mặt tại quầy';
-
-    await this.mailService.sendReservationInvoiceEmail(recipientEmail, {
-      customerName: reservation.customerName,
-      reservationCode: reservation.reservationCode,
-      branchName: reservation.branch?.name || 'FoodHub Restaurant',
-      branchAddress: reservation.branch?.address || reservation.branch?.streetAddress || null,
-      branchPhone: reservation.branch?.phone || null,
-      reservationDate: dateStr,
-      reservationTime: reservation.reservationTime,
-      tableName: reservation.table?.tableNumber || null,
-      floor: reservation.table?.floor || null,
-      items: reservation.orders.map((o) => ({
-        name: o.menuItem?.name || 'Món ăn',
-        quantity: o.quantity,
-        unitPrice: Number(o.unitPrice),
-        subtotal: Number(o.unitPrice) * o.quantity,
-      })),
-      totalFoodAmount,
-      depositAmount,
-      settlementAmount,
-      paymentMethod: providerLabel,
-      transactionCode,
-    });
   }
 
   private sanitizePayloadForStorage(rawPayload: Record<string, unknown>): Prisma.InputJsonValue {

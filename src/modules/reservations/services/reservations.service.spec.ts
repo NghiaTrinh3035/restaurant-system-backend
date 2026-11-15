@@ -1,7 +1,17 @@
-import { PaymentProvider, PaymentPurpose, PaymentStatus, ReservationStatus, RestaurantTableStatus, Role } from '@prisma/client';
+import {
+  InvoiceStatus,
+  KitchenItemStatus,
+  PaymentProvider,
+  PaymentPurpose,
+  PaymentStatus,
+  ReservationStatus,
+  RestaurantTableStatus,
+  Role,
+} from '@prisma/client';
 import type { PrismaService } from 'src/prisma/prisma.service';
 import type { TablesGateway } from 'src/gateway/tables.gateway';
 import type { MailService } from 'src/mail/mail.service';
+import type { DineInService } from 'src/modules/dine-in/services/dine-in.service';
 import type { TablesService } from 'src/modules/tables/services/tables.service';
 import type { TableLockService } from 'src/modules/tables/services/table-lock.service';
 import type { ReservationAvailabilityService } from './reservation-availability.service';
@@ -16,6 +26,7 @@ describe('ReservationsService Payment Integration', () => {
     reservationOrder: { createMany: jest.Mock };
     restaurantTable: { findUnique: jest.Mock; updateMany: jest.Mock };
     paymentTransaction: { create: jest.Mock };
+    invoice: { findMany: jest.Mock; update: jest.Mock };
     $transaction: jest.Mock;
   };
   let availability: {
@@ -31,11 +42,16 @@ describe('ReservationsService Payment Integration', () => {
     notifyReservationCreated: jest.Mock;
     notifyReservationUpdated: jest.Mock;
     notifyTableStatusChanged: jest.Mock;
+    notifyTableInvoiceClosed: jest.Mock;
     notifyPaymentUpdated: jest.Mock;
     server: { to: jest.Mock };
   };
   let tablesService: { updateTableStatus: jest.Mock };
   let mailService: { sendReservationConfirmedEmail: jest.Mock; sendReservationInvoiceEmail: jest.Mock };
+  let dineInService: {
+    ensureInvoiceForSeatedReservation: jest.Mock;
+    closeOrFinalizeReservationInvoices: jest.Mock;
+  };
   let paymentsService: { createPayment: jest.Mock; markRefunded: jest.Mock };
 
   beforeEach(() => {
@@ -50,6 +66,10 @@ describe('ReservationsService Payment Integration', () => {
       reservationOrder: { createMany: jest.fn() },
       restaurantTable: { findUnique: jest.fn(), updateMany: jest.fn() },
       paymentTransaction: { create: jest.fn() },
+      invoice: {
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn(),
+      },
       $transaction: jest.fn((cb: (tx: typeof prisma) => Promise<unknown>) => cb(prisma)),
     };
 
@@ -71,6 +91,7 @@ describe('ReservationsService Payment Integration', () => {
       notifyReservationCreated: jest.fn(),
       notifyReservationUpdated: jest.fn(),
       notifyTableStatusChanged: jest.fn(),
+      notifyTableInvoiceClosed: jest.fn(),
       notifyPaymentUpdated: jest.fn(),
       server: { to: jest.fn().mockReturnValue({ emit: jest.fn() }) },
     };
@@ -82,6 +103,11 @@ describe('ReservationsService Payment Integration', () => {
     mailService = {
       sendReservationConfirmedEmail: jest.fn().mockResolvedValue(true),
       sendReservationInvoiceEmail: jest.fn().mockResolvedValue(true),
+    };
+
+    dineInService = {
+      ensureInvoiceForSeatedReservation: jest.fn(),
+      closeOrFinalizeReservationInvoices: jest.fn(),
     };
 
     paymentsService = {
@@ -96,6 +122,7 @@ describe('ReservationsService Payment Integration', () => {
       tablesGateway as unknown as TablesGateway,
       tablesService as unknown as TablesService,
       mailService as unknown as MailService,
+      dineInService as unknown as DineInService,
       paymentsService as unknown as PaymentsService,
     );
   });
@@ -140,7 +167,7 @@ describe('ReservationsService Payment Integration', () => {
       payUrl: 'https://sandbox.vnpayment.vn/pay/VN20261115183000A1B2',
     });
 
-    const res = await service.createReservation({
+    const res = (await service.createReservation({
       branchId: 'branch-1',
       customerName: 'Le Van B',
       customerPhone: '0901234567',
@@ -149,7 +176,7 @@ describe('ReservationsService Payment Integration', () => {
       reservationTime: '18:30',
       paymentProvider: PaymentProvider.VNPAY,
       preOrders: [{ menuItemId: 'item-1', quantity: 1 }],
-    });
+    })) as { payUrl?: string | null };
 
     expect(paymentsService.createPayment).toHaveBeenCalledWith(
       {
@@ -292,5 +319,139 @@ describe('ReservationsService Payment Integration', () => {
     });
     expect(mailService.sendReservationInvoiceEmail).toHaveBeenCalled();
     expect(settled.reservationId).toBe('res-1');
+  });
+
+  it('includes extra dine-in OrderBatch items (excluding CANCELLED) and closes open Invoice on cash settlement', async () => {
+    prisma.reservation.findFirst.mockResolvedValue({
+      id: 'res-2',
+      reservationCode: 'RB-9999',
+      status: ReservationStatus.SEATED,
+      customerName: 'Tran Thi C',
+      customerPhone: '0909888777',
+      customerEmail: 'c@example.com',
+      reservationDate: new Date('2026-11-20'),
+      reservationTime: '19:00',
+      slotDurationMinutes: 90,
+      branchId: 'branch-1',
+      tableId: 't2',
+      branch: { id: 'branch-1', name: 'Chi nhánh 1' },
+      table: { id: 't2', tableNumber: '02', floor: 1 },
+      orders: [
+        { id: 'o1', menuItemId: 'm1', quantity: 1, unitPrice: 100000, menuItem: { name: 'Khai vị' } },
+      ],
+      invoices: [
+        {
+          id: 'inv-2',
+          invoiceCode: 'INV-2',
+          discountAmount: 0,
+          batches: [
+            {
+              batchNumber: 1,
+              items: [
+                {
+                  id: 'oi-1',
+                  menuItemId: 'm1',
+                  quantity: 1,
+                  unitPrice: 100000,
+                  subtotal: 100000,
+                  status: KitchenItemStatus.SERVED,
+                  menuItem: { name: 'Khai vị', imageUrl: null },
+                },
+              ],
+            },
+            {
+              batchNumber: 2,
+              items: [
+                {
+                  id: 'oi-2',
+                  menuItemId: 'm2',
+                  quantity: 2,
+                  unitPrice: 75000,
+                  subtotal: 150000,
+                  status: KitchenItemStatus.PREPARING,
+                  menuItem: { name: 'Lẩu bò', imageUrl: null },
+                },
+                {
+                  id: 'oi-3',
+                  menuItemId: 'm3',
+                  quantity: 1,
+                  unitPrice: 50000,
+                  subtotal: 50000,
+                  status: KitchenItemStatus.CANCELLED,
+                  menuItem: { name: 'Món đã hủy', imageUrl: null },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      payments: [
+        {
+          id: 'p1',
+          transactionCode: 'MM001',
+          provider: PaymentProvider.MOMO,
+          purpose: PaymentPurpose.RESERVATION_DEPOSIT,
+          status: PaymentStatus.SUCCESS,
+          amount: 100000,
+          paidAt: new Date(),
+          createdAt: new Date(),
+        },
+      ],
+      user: { id: 'u2', fullName: 'Tran Thi C', email: 'c@example.com', phone: '0909888777' },
+    });
+
+    prisma.reservation.update.mockResolvedValue({
+      id: 'res-2',
+      status: ReservationStatus.COMPLETED,
+      userId: 'u2',
+    });
+    prisma.paymentTransaction.create.mockResolvedValue({ id: 'ptx-settle-2' });
+    prisma.restaurantTable.updateMany.mockResolvedValue({ count: 1 });
+    prisma.invoice.findMany.mockResolvedValue([
+      {
+        id: 'inv-2',
+        invoiceCode: 'INV-2',
+        branchId: 'branch-1',
+        tableId: 't2',
+        discountAmount: 0,
+        batches: [{ id: 'b1' }, { id: 'b2' }],
+      },
+    ]);
+    prisma.invoice.update.mockResolvedValue({
+      id: 'inv-2',
+      invoiceCode: 'INV-2',
+      branchId: 'branch-1',
+      tableId: 't2',
+      finalAmount: 250000,
+    });
+
+    const settled = (await service.settleReservationBill(
+      'res-2',
+      { paymentMethod: PaymentProvider.CASH },
+      { id: 'staff-1', email: 'staff@example.com', role: Role.STAFF, branchId: 'branch-1' },
+    )) as { totalFoodAmount: number; depositAmount: number; remainingAmount: number };
+
+    // 100k pre-order + 150k extra dish (50k cancelled item excluded) = 250k total, minus 100k deposit = 150k remaining
+    expect(settled.totalFoodAmount).toBe(250000);
+    expect(settled.depositAmount).toBe(100000);
+
+    const ptxCalls = prisma.paymentTransaction.create.mock.calls as Array<[{ data: { amount: number } }]>;
+    expect(ptxCalls[0][0].data.amount).toBe(150000);
+    const invUpdateCalls = prisma.invoice.update.mock.calls as Array<
+      [{ where: { id: string }; data: { status: InvoiceStatus; subtotal: number; finalAmount: number } }]
+    >;
+    expect(invUpdateCalls[0][0].where.id).toBe('inv-2');
+    expect(invUpdateCalls[0][0].data.status).toBe(InvoiceStatus.PAID);
+    expect(invUpdateCalls[0][0].data.subtotal).toBe(250000);
+    expect(invUpdateCalls[0][0].data.finalAmount).toBe(250000);
+    expect(tablesGateway.notifyTableInvoiceClosed).toHaveBeenCalledWith('branch-1', 't2', {
+      invoiceId: 'inv-2',
+      invoiceCode: 'INV-2',
+      finalAmount: 250000,
+    });
+    expect(tablesGateway.notifyReservationUpdated).toHaveBeenCalledWith(
+      'branch-1',
+      expect.objectContaining({ id: 'res-2', status: ReservationStatus.COMPLETED }),
+    );
   });
 });

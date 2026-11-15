@@ -1,10 +1,14 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import {
+  InvoiceStatus,
+  KitchenItemStatus,
   PaymentProvider,
   PaymentPurpose,
   PaymentStatus,
   PickupOrderStatus,
+  ReservationStatus,
+  RestaurantTableStatus,
   Role,
 } from '@prisma/client';
 import type Redis from 'ioredis';
@@ -163,6 +167,16 @@ describe('PaymentsModule security & transaction handling', () => {
         pickupOrder: {
           updateMany: jest.fn(),
         },
+        reservation: {
+          updateMany: jest.fn(),
+        },
+        restaurantTable: {
+          updateMany: jest.fn(),
+        },
+        invoice: {
+          findMany: jest.fn().mockResolvedValue([]),
+          update: jest.fn(),
+        },
       };
 
       const prisma = {
@@ -185,6 +199,9 @@ describe('PaymentsModule security & transaction handling', () => {
       const tablesGateway = {
         notifyPaymentUpdated: jest.fn(),
         notifyTableStatusChanged: jest.fn(),
+        notifyPickupOrderEvent: jest.fn(),
+        notifyReservationUpdated: jest.fn(),
+        notifyTableInvoiceClosed: jest.fn(),
         server: { to: jest.fn().mockReturnValue({ emit: jest.fn() }) },
       };
 
@@ -466,6 +483,180 @@ describe('PaymentsModule security & transaction handling', () => {
       expect(history).toHaveLength(1);
       expect(history[0].transactionCode).toBe('MM20261115001');
       expect(history[0].amount).toBe(150000);
+    });
+
+    it('calculates RESERVATION_SETTLEMENT including dine-in OrderBatch items and closes open Invoice on IPN', async () => {
+      const { service, prisma, tx, tablesGateway } = createSut();
+
+      prisma.reservation.findUnique.mockResolvedValue({
+        id: 'res-1',
+        reservationCode: 'RB-8888',
+        branchId: 'branch-1',
+        userId: 'user-1',
+        status: ReservationStatus.SEATED,
+        orders: [{ id: 'o1', menuItemId: 'm1', quantity: 1, unitPrice: 100000 }],
+        invoices: [
+          {
+            id: 'inv-1',
+            invoiceCode: 'INV-1',
+            discountAmount: 0,
+            batches: [
+              {
+                batchNumber: 1,
+                items: [
+                  {
+                    id: 'oi-1',
+                    menuItemId: 'm1',
+                    quantity: 1,
+                    unitPrice: 100000,
+                    subtotal: 100000,
+                    status: KitchenItemStatus.SERVED,
+                  },
+                ],
+              },
+              {
+                batchNumber: 2,
+                items: [
+                  {
+                    id: 'oi-2',
+                    menuItemId: 'm2',
+                    quantity: 1,
+                    unitPrice: 200000,
+                    subtotal: 200000,
+                    status: KitchenItemStatus.QUEUED,
+                  },
+                  {
+                    id: 'oi-3',
+                    menuItemId: 'm3',
+                    quantity: 1,
+                    unitPrice: 50000,
+                    subtotal: 50000,
+                    status: KitchenItemStatus.CANCELLED,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        payments: [{ id: 'dep-1', purpose: PaymentPurpose.RESERVATION_DEPOSIT, amount: 100000 }],
+      });
+
+      tx.paymentTransaction.create.mockImplementation(
+        ({ data }: { data: { transactionCode: string; amount: number; expiresAt: Date } }) =>
+          Promise.resolve({ id: 'ptx-settle-1', ...data }),
+      );
+      prisma.paymentTransaction.update.mockImplementation(({ data }: { data: { payUrl: string } }) =>
+        Promise.resolve({
+          id: 'ptx-settle-1',
+          transactionCode: 'VN20261115150000999',
+          provider: PaymentProvider.VNPAY,
+          purpose: PaymentPurpose.RESERVATION_SETTLEMENT,
+          status: PaymentStatus.PENDING,
+          amount: 200000,
+          payUrl: data.payUrl,
+          expiresAt: new Date(),
+          reservationId: 'res-1',
+          pickupOrderId: null,
+        }),
+      );
+
+      const created = await service.createPayment(
+        {
+          provider: PaymentProvider.VNPAY,
+          purpose: PaymentPurpose.RESERVATION_SETTLEMENT,
+          reservationId: 'res-1',
+        },
+        customer,
+        '127.0.0.1',
+      );
+      expect(created.amount).toBe(200000); // 100k + 200k (50k cancelled ignored) - 100k deposit
+
+      const ipnParams: Record<string, string> = {
+        vnp_Amount: '20000000',
+        vnp_ResponseCode: '00',
+        vnp_TmnCode: TEST_CONFIG['payment.vnpay.tmnCode'],
+        vnp_TransactionNo: '887766',
+        vnp_TransactionStatus: '00',
+        vnp_TxnRef: 'VN20261115150000999',
+      };
+      const signData = Object.keys(ipnParams)
+        .sort()
+        .map((k) => `${k}=${ipnParams[k]}`)
+        .join('&');
+      const vnp_SecureHash = hmacSha512Hex(TEST_CONFIG['payment.vnpay.hashSecret'], signData);
+
+      prisma.paymentTransaction.findUnique.mockResolvedValueOnce({
+        id: 'ptx-settle-1',
+        transactionCode: 'VN20261115150000999',
+        amount: 200000,
+        status: PaymentStatus.PENDING,
+        provider: PaymentProvider.VNPAY,
+        purpose: PaymentPurpose.RESERVATION_SETTLEMENT,
+        pickupOrderId: null,
+        reservationId: 'res-1',
+        pickupOrder: null,
+        reservation: {
+          id: 'res-1',
+          branchId: 'branch-1',
+          status: ReservationStatus.SEATED,
+          tableId: 't1',
+          userId: 'user-1',
+        },
+      });
+      tx.paymentTransaction.updateMany.mockResolvedValueOnce({ count: 1 });
+      tx.reservation.updateMany.mockResolvedValueOnce({ count: 1 });
+      tx.restaurantTable.updateMany.mockResolvedValueOnce({ count: 1 });
+      tx.invoice.findMany.mockResolvedValueOnce([
+        {
+          id: 'inv-1',
+          invoiceCode: 'INV-1',
+          branchId: 'branch-1',
+          tableId: 't1',
+          subtotal: 350000,
+          discountAmount: 0,
+          batches: [
+            {
+              items: [
+                { unitPrice: 100000, quantity: 1, subtotal: 100000, status: KitchenItemStatus.SERVED },
+                { unitPrice: 200000, quantity: 1, subtotal: 200000, status: KitchenItemStatus.QUEUED },
+                { unitPrice: 50000, quantity: 1, subtotal: 50000, status: KitchenItemStatus.CANCELLED },
+              ],
+            },
+          ],
+        },
+      ]);
+      tx.invoice.update.mockResolvedValueOnce({
+        id: 'inv-1',
+        invoiceCode: 'INV-1',
+        branchId: 'branch-1',
+        tableId: 't1',
+        finalAmount: 300000,
+      });
+
+      const ipnRes = await service.handleVnpayIpn({ ...ipnParams, vnp_SecureHash });
+      expect(ipnRes).toEqual({ RspCode: '00', Message: 'Confirm Success' });
+      const invoiceUpdateCalls = tx.invoice.update.mock.calls as Array<
+        [{ where: { id: string }; data: { status: InvoiceStatus; subtotal: number; finalAmount: number; paymentMethod: PaymentProvider } }]
+      >;
+      expect(invoiceUpdateCalls[0][0].where.id).toBe('inv-1');
+      expect(invoiceUpdateCalls[0][0].data.status).toBe(InvoiceStatus.PAID);
+      expect(invoiceUpdateCalls[0][0].data.subtotal).toBe(300000);
+      expect(invoiceUpdateCalls[0][0].data.finalAmount).toBe(300000);
+      expect(invoiceUpdateCalls[0][0].data.paymentMethod).toBe(PaymentProvider.VNPAY);
+      expect(tablesGateway.notifyTableInvoiceClosed).toHaveBeenCalledWith('branch-1', 't1', {
+        invoiceId: 'inv-1',
+        invoiceCode: 'INV-1',
+        finalAmount: 300000,
+      });
+      expect(tablesGateway.notifyReservationUpdated).toHaveBeenCalledWith('branch-1', {
+        id: 'res-1',
+        status: ReservationStatus.COMPLETED,
+        userId: 'user-1',
+      });
+      expect(tablesGateway.notifyTableStatusChanged).toHaveBeenCalledWith('branch-1', {
+        tableId: 't1',
+        status: RestaurantTableStatus.DIRTY,
+      });
     });
   });
 });
