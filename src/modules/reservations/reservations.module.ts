@@ -6,6 +6,10 @@ import { PrismaModule } from 'src/prisma/prisma.module';
 import { TablesModule } from 'src/modules/tables/tables.module';
 import { GatewayModule } from 'src/gateway/gateway.module';
 import { MailModule } from 'src/mail/mail.module';
+import { DineInModule } from 'src/modules/dine-in/dine-in.module';
+
+@Module({
+  imports: [PrismaModule, TablesModule, GatewayModule, MailModule, DineInModule],
 import { PaymentsModule } from '../payments/payments.module';
 
 @Module({

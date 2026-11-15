@@ -34,6 +34,7 @@ model MenuItem {
   branchMenuItems   BranchMenuItem[]
   reservationOrders ReservationOrder[]
   pickupOrderItems  PickupOrderItem[]
+  orderItems        OrderItem[]
 
   @@index([categoryId, isActive])
   @@map("menu_items")

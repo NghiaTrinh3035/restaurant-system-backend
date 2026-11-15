@@ -35,6 +35,36 @@ export class PickupOrdersService {
     private readonly paymentsService: PaymentsService,
   ) {}
 
+  private buildQrPayload(order: {
+    orderCode: string;
+    branchId: string;
+    pickupDate: Date;
+    pickupTime: string;
+    customerPhone: string;
+    customerName: string;
+  }): string {
+    return JSON.stringify({
+      type: 'PICKUP',
+      code: order.orderCode,
+      branchId: order.branchId,
+      date: order.pickupDate.toISOString().split('T')[0],
+      time: order.pickupTime,
+      phone: order.customerPhone,
+      name: order.customerName,
+    });
+  }
+
+  private buildOrderLookupWhere(identifier: string): Prisma.PickupOrderWhereInput {
+    const clean = (identifier || '').trim();
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clean);
+    const orConditions: Prisma.PickupOrderWhereInput[] = [{ orderCode: clean }];
+    if (isUuid) {
+      orConditions.push({ id: clean });
+    }
+    return { OR: orConditions };
+  }
+
+  async createPickupOrder(dto: CreatePickupOrderDto, user?: ICurrentUser) {
   async createPickupOrder(
     dto: CreatePickupOrderDto,
     user?: ICurrentUser,
@@ -194,11 +224,13 @@ export class PickupOrdersService {
         });
     }
 
-    // 2. Phát sóng WebSocket thông báo cho chi nhánh có đơn mang về mới
-    try {
-      this.tablesGateway.server?.to(`branch:${dto.branchId}`).emit('pickupOrder:created', createdOrder);
-    } catch {
-      // Bỏ qua lỗi socket nếu có
+    // 2. Phát sóng WebSocket thông báo cho chi nhánh, quản trị viên và khách hàng có đơn mang về mới
+    if (createdOrder) {
+      try {
+        this.tablesGateway.notifyPickupOrderEvent('pickupOrder:created', createdOrder);
+      } catch {
+        // Bỏ qua lỗi socket nếu có
+      }
     }
 
     if (dto.paymentProvider && createdOrder) {
@@ -330,15 +362,7 @@ export class PickupOrdersService {
     ]);
 
     const enriched = items.map((order) => {
-      const qrPayload = JSON.stringify({
-        type: 'PICKUP',
-        code: order.orderCode,
-        branchId: order.branchId,
-        date: order.pickupDate.toISOString().split('T')[0],
-        time: order.pickupTime,
-        phone: order.customerPhone,
-        name: order.customerName,
-      });
+      const qrPayload = this.buildQrPayload(order);
 
       const canCancel =
         order.status === PickupOrderStatus.PENDING || order.status === PickupOrderStatus.CONFIRMED;
@@ -358,9 +382,7 @@ export class PickupOrdersService {
 
   async getPickupOrderById(id: string, user?: ICurrentUser) {
     const order = await this.prisma.pickupOrder.findFirst({
-      where: {
-        OR: [{ id: id.includes('-') && id.length === 36 ? id : undefined }, { orderCode: id }],
-      },
+      where: this.buildOrderLookupWhere(id),
       include: {
         branch: true,
         items: { include: { menuItem: true } },
@@ -388,7 +410,10 @@ export class PickupOrdersService {
       throw new ForbiddenException('Bạn không có quyền xem thông tin đơn hàng này.');
     }
 
-    return order;
+    return {
+      ...order,
+      qrPayload: this.buildQrPayload(order),
+    };
   }
 
   async cancelPickupOrder(id: string, reason?: string, user?: ICurrentUser) {
@@ -435,6 +460,7 @@ export class PickupOrdersService {
     });
 
     try {
+      this.tablesGateway.notifyPickupOrderEvent('pickupOrder:statusChanged', updated);
       await this.paymentsService.markRefunded({ pickupOrderId: order.id }, refundReason);
     } catch (err) {
       this.logger.error(`[Refund] Hoàn tiền thất bại cho đơn ${order.orderCode}:`, err);
@@ -508,7 +534,7 @@ export class PickupOrdersService {
     }
 
     try {
-      this.tablesGateway.server?.to(`branch:${order.branchId}`).emit('pickupOrder:statusChanged', updated);
+      this.tablesGateway.notifyPickupOrderEvent('pickupOrder:statusChanged', updated);
     } catch {
       // Bỏ qua lỗi socket
     }
@@ -532,12 +558,7 @@ export class PickupOrdersService {
     cleanCode = cleanCode.replace(/^["']|["']$/g, '').toUpperCase();
 
     const order = await this.prisma.pickupOrder.findFirst({
-      where: {
-        OR: [
-          { orderCode: cleanCode },
-          { id: cleanCode.length === 36 && cleanCode.includes('-') ? cleanCode : undefined },
-        ],
-      },
+      where: this.buildOrderLookupWhere(cleanCode),
       include: {
         branch: true,
         items: { include: { menuItem: true } },

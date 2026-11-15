@@ -19,6 +19,7 @@ model User {
   refreshTokens RefreshToken[]
   reservations  Reservation[]
   pickupOrders  PickupOrder[]
+  invoices      Invoice[]
   payments      PaymentTransaction[]
 
   @@index([branchId, isActive])
@@ -43,6 +44,7 @@ model RefreshToken {
 enum Role {
   USER
   STAFF
+  KITCHEN
   ADMIN
 }
 

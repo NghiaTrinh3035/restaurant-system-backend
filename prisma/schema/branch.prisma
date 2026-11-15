@@ -24,6 +24,8 @@ model RestaurantBranch {
   operatingHours      BranchOperatingHours[]
   reservations        Reservation[]
   pickupOrders        PickupOrder[]
+  invoices            Invoice[]
+  orderBatches        OrderBatch[]
 
   @@map("restaurant_branches")
 }
