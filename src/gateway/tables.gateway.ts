@@ -9,6 +9,7 @@ import {
   MessageBody,
 } from '@nestjs/websockets';
 import { Logger, Inject, forwardRef } from '@nestjs/common';
+import { Role } from '@prisma/client';
 import { Server, Socket } from 'socket.io';
 import { Role } from '@prisma/client';
 import { TableLockService } from 'src/modules/tables/services/table-lock.service';
@@ -17,6 +18,18 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import { BranchJoinDto, TableLockDto } from './dto/table-lock.dto';
+
+interface SocketAuthUser {
+  id: string;
+  email: string;
+  role: Role;
+  branchId: string | null;
+  isActive: boolean;
+}
+
+interface TypedSocketData {
+  user?: SocketAuthUser | null;
+}
 
 @WebSocketGateway({
   cors: {
@@ -39,15 +52,16 @@ export class TablesGateway
     private readonly prisma: PrismaService,
   ) {}
 
-  afterInit(server: Server) {
+  afterInit() {
     this.logger.log('WebSocket Gateway Initialized (Socket.IO)');
   }
 
   async handleConnection(client: Socket) {
+    const socketData = client.data as TypedSocketData;
     const token = this.extractToken(client);
     if (token) {
       try {
-        const payload = this.authJwtService.verifyAccessToken(token);
+        const payload = this.authJwtService.verifyAccessToken(token) as { sub: string };
         const user = await this.prisma.user.findUnique({
           where: { id: payload.sub },
           select: {
@@ -65,16 +79,17 @@ export class TablesGateway
           if (user.role === Role.ADMIN) {
             await client.join('admin:all');
           }
+          socketData.user = user;
           this.logger.log(`Client authenticated: ${client.id} (User: ${user.email}, Role: ${user.role})`);
         } else {
-          client.data.user = null;
+          socketData.user = null;
         }
-      } catch (err) {
-        client.data.user = null;
+      } catch {
+        socketData.user = null;
         this.logger.debug(`Client connected as Guest (Invalid token): ${client.id}`);
       }
     } else {
-      client.data.user = null;
+      socketData.user = null;
       this.logger.log(`Client connected as Guest: ${client.id}`);
     }
   }
@@ -84,7 +99,7 @@ export class TablesGateway
   }
 
   private extractToken(client: Socket): string | null {
-    const authToken = client.handshake?.auth?.token;
+    const authToken: unknown = client.handshake?.auth?.token;
     if (authToken && typeof authToken === 'string') {
       return authToken.startsWith('Bearer ') ? authToken.slice(7) : authToken;
     }
@@ -250,7 +265,8 @@ export class TablesGateway
     @MessageBody() dto: TableLockDto,
   ) {
     // 1. Kiểm tra xác thực người dùng & dữ liệu đầu vào
-    if (!client.data?.user) {
+    const user = (client.data as TypedSocketData | undefined)?.user;
+    if (!user) {
       client.emit('table:lock_failed', {
         tableId: dto?.tableId,
         branchId: dto?.branchId,
@@ -264,8 +280,6 @@ export class TablesGateway
       client.emit('table:lock_failed', { tableId: dto?.tableId, branchId: dto?.branchId, reason: invalidReason });
       return;
     }
-
-    const user = client.data.user;
 
     // 2. Gọi service thực hiện atomic Redis lock theo khung giờ (mặc định 600s = 10 phút)
     const result = await this.tableLockService.lockTable(
@@ -309,7 +323,8 @@ export class TablesGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() dto: TableLockDto,
   ) {
-    if (!client.data?.user) {
+    const user = (client.data as TypedSocketData | undefined)?.user;
+    if (!user) {
       client.emit('table:release_failed', {
         tableId: dto?.tableId,
         branchId: dto?.branchId,
@@ -323,8 +338,6 @@ export class TablesGateway
       client.emit('table:release_failed', { tableId: dto?.tableId, branchId: dto?.branchId, reason: invalidReason });
       return;
     }
-
-    const user = client.data.user;
 
     const result = await this.tableLockService.releaseTable(dto, { id: user.id, role: user.role });
 
@@ -498,5 +511,13 @@ export class TablesGateway
       emitter = emitter.to(`user:${order.userId}`);
     }
     emitter.emit(event, order);
+  }
+
+  /**
+   * Phát sự kiện cập nhật trạng thái thanh toán theo chi nhánh
+   */
+  notifyPaymentUpdated(branchId: string, paymentData: unknown) {
+    const room = `branch:${branchId}`;
+    this.server.to(room).emit('payment:updated', paymentData);
   }
 }

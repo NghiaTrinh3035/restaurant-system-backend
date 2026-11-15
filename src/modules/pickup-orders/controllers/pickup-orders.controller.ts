@@ -8,9 +8,11 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import type { Request } from 'express';
 import { PickupOrdersService } from '../services/pickup-orders.service';
 import { CreatePickupOrderDto } from '../dtos/create-pickup-order.dto';
 import { QueryPickupOrderDto } from '../dtos/query-pickup-order.dto';
@@ -37,9 +39,18 @@ export class PickupOrdersController {
   @ResponseMessage('Đặt món mang về thành công.')
   async createPickupOrder(
     @Body() dto: CreatePickupOrderDto,
+    @Req() req: Request,
     @CurrentUser() user?: ICurrentUser,
   ) {
-    return this.pickupOrdersService.createPickupOrder(dto, user);
+    const forwardedFor = req.headers['x-forwarded-for'];
+    const rawIp =
+      typeof forwardedFor === 'string'
+        ? forwardedFor
+        : Array.isArray(forwardedFor)
+          ? forwardedFor[0]
+          : req.ip;
+
+    return this.pickupOrdersService.createPickupOrder(dto, user, rawIp);
   }
 
   @Get('my-history')

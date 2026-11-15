@@ -20,6 +20,7 @@ model User {
   reservations  Reservation[]
   pickupOrders  PickupOrder[]
   invoices      Invoice[]
+  payments      PaymentTransaction[]
 
   @@index([branchId, isActive])
   @@index([role, isActive])

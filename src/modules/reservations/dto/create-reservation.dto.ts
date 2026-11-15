@@ -4,6 +4,7 @@ import {
   IsUUID,
   IsOptional,
   IsEmail,
+  IsEnum,
   IsInt,
   Min,
   Max,
@@ -13,6 +14,7 @@ import {
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
+import { PaymentProvider } from '@prisma/client';
 
 export class PreOrderItemDto {
   @ApiProperty({ description: 'ID món ăn' })
@@ -97,4 +99,13 @@ export class CreateReservationDto {
   @Type(() => PreOrderItemDto)
   @IsOptional()
   preOrders?: PreOrderItemDto[];
+
+  @ApiPropertyOptional({
+    description: 'Cổng thanh toán tiền cọc trực tuyến (MOMO hoặc VNPAY)',
+    enum: PaymentProvider,
+    example: PaymentProvider.MOMO,
+  })
+  @IsOptional()
+  @IsEnum(PaymentProvider, { message: 'Cổng thanh toán phải là MOMO hoặc VNPAY' })
+  paymentProvider?: PaymentProvider;
 }

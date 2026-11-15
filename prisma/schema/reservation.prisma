@@ -21,9 +21,10 @@ model Reservation {
   branch              RestaurantBranch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
   user                User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
   tableType           TableType?         @relation(fields: [tableTypeId], references: [id], onDelete: SetNull)
-  table               RestaurantTable?   @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  table               RestaurantTable?     @relation(fields: [tableId], references: [id], onDelete: SetNull)
   orders              ReservationOrder[]
   invoices            Invoice[]
+  payments            PaymentTransaction[]
 
   @@index([branchId, reservationDate])
   @@index([userId])

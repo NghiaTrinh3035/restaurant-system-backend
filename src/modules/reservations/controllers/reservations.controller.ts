@@ -9,9 +9,11 @@ import {
   Post,
   Put,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import type { Request } from 'express';
 import { ReservationsService } from '../services/reservations.service';
 import { ReservationAvailabilityService } from '../services/reservation-availability.service';
 import { CreateReservationDto } from '../dto/create-reservation.dto';
@@ -27,6 +29,7 @@ import { RolesGuard } from 'src/core/common/guards/roles.guard';
 import { Roles } from 'src/core/common/decorators/roles.decorator';
 import { Role } from '@prisma/client';
 import { UpdateReservationStatusDto } from '../dto/update-reservation-status.dto';
+import { SettleBillDto } from '../dto/settle-bill.dto';
 import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
 
 @ApiTags('Reservations')
@@ -43,9 +46,18 @@ export class ReservationsController {
   @ResponseMessage('Đặt bàn trực tuyến thành công.')
   async createReservation(
     @Body() dto: CreateReservationDto,
+    @Req() req: Request,
     @CurrentUser() user?: ICurrentUser,
-  ) {
-    return this.reservationsService.createReservation(dto, user);
+  ): Promise<Record<string, unknown>> {
+    const forwardedFor = req.headers['x-forwarded-for'];
+    const rawIp =
+      typeof forwardedFor === 'string'
+        ? forwardedFor
+        : Array.isArray(forwardedFor)
+          ? forwardedFor[0]
+          : req.ip;
+
+    return this.reservationsService.createReservation(dto, user, rawIp);
   }
 
   @Get('available-slots')
@@ -147,5 +159,38 @@ export class ReservationsController {
     @CurrentUser() user: ICurrentUser,
   ) {
     return this.reservationsService.checkInQr(reservationCode, user);
+  }
+
+  @Get(':id/bill')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Lấy thông tin hóa đơn quyết toán đặt bàn thành công.')
+  async getReservationBill(
+    @Param('id') id: string,
+    @CurrentUser() user: ICurrentUser,
+  ) {
+    return this.reservationsService.getReservationBill(id, user);
+  }
+
+  @Post(':id/settle')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.STAFF, Role.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Quyết toán hóa đơn đặt bàn thành công.')
+  async settleReservationBill(
+    @Param('id') id: string,
+    @Body() dto: SettleBillDto,
+    @Req() req: Request,
+    @CurrentUser() user: ICurrentUser,
+  ) {
+    const forwardedFor = req.headers['x-forwarded-for'];
+    const rawIp =
+      typeof forwardedFor === 'string'
+        ? forwardedFor
+        : Array.isArray(forwardedFor)
+          ? forwardedFor[0]
+          : req.ip;
+
+    return this.reservationsService.settleReservationBill(id, dto, user, rawIp);
   }
 }

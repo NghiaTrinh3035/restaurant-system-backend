@@ -10,6 +10,10 @@ import { DineInModule } from 'src/modules/dine-in/dine-in.module';
 
 @Module({
   imports: [PrismaModule, TablesModule, GatewayModule, MailModule, DineInModule],
+import { PaymentsModule } from '../payments/payments.module';
+
+@Module({
+  imports: [PrismaModule, TablesModule, GatewayModule, MailModule, PaymentsModule],
   controllers: [ReservationsController],
   providers: [ReservationsService, ReservationAvailabilityService],
   exports: [ReservationsService],
