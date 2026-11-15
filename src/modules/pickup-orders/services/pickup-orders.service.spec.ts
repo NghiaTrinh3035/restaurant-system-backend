@@ -18,7 +18,10 @@ describe('PickupOrdersService Payment Integration', () => {
     createPayment: jest.Mock;
     markRefunded: jest.Mock;
   };
-  let tablesGateway: { server: { to: jest.Mock } };
+  let tablesGateway: {
+    notifyPickupOrderEvent: jest.Mock;
+    server: { to: jest.Mock };
+  };
   let mailService: { sendPickupOrderInvoiceEmail: jest.Mock; sendPickupOrderReadyEmail: jest.Mock };
 
   beforeEach(() => {
@@ -41,6 +44,7 @@ describe('PickupOrdersService Payment Integration', () => {
     };
 
     tablesGateway = {
+      notifyPickupOrderEvent: jest.fn(),
       server: {
         to: jest.fn().mockReturnValue({ emit: jest.fn() }),
       },
@@ -99,7 +103,7 @@ describe('PickupOrdersService Payment Integration', () => {
       amount: 50000,
     });
 
-    const res = await service.createPickupOrder({
+    const res = (await service.createPickupOrder({
       branchId: 'branch-1',
       pickupDate: dateStr,
       pickupTime: '12:00',
@@ -107,7 +111,7 @@ describe('PickupOrdersService Payment Integration', () => {
       customerPhone: '0901234567',
       paymentProvider: PaymentProvider.MOMO,
       items: [{ menuItemId: 'item-1', quantity: 1 }],
-    });
+    })) as { payUrl?: string | null } | null;
 
     expect(paymentsService.createPayment).toHaveBeenCalledWith(
       {
@@ -118,7 +122,7 @@ describe('PickupOrdersService Payment Integration', () => {
       undefined,
       undefined,
     );
-    expect(res.payUrl).toBe('https://test-payment.momo.vn/pay/MM20261115120000AABB');
+    expect(res?.payUrl).toBe('https://test-payment.momo.vn/pay/MM20261115120000AABB');
   });
 
   it('triggers markRefunded when an order is cancelled', async () => {
@@ -126,6 +130,10 @@ describe('PickupOrdersService Payment Integration', () => {
       id: 'order-1',
       orderCode: 'PU-12345',
       branchId: 'branch-1',
+      pickupDate: new Date('2026-12-01'),
+      pickupTime: '12:00',
+      customerName: 'Nguyen Van A',
+      customerPhone: '0901234567',
       status: PickupOrderStatus.CONFIRMED,
       userId: 'user-1',
       items: [],
@@ -143,6 +151,10 @@ describe('PickupOrdersService Payment Integration', () => {
     expect(paymentsService.markRefunded).toHaveBeenCalledWith(
       { pickupOrderId: 'order-1' },
       'Khách đổi ý',
+    );
+    expect(tablesGateway.notifyPickupOrderEvent).toHaveBeenCalledWith(
+      'pickupOrder:statusChanged',
+      expect.objectContaining({ id: 'order-1', status: PickupOrderStatus.CANCELLED }),
     );
   });
 });

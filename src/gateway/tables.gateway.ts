@@ -9,7 +9,6 @@ import {
   MessageBody,
 } from '@nestjs/websockets';
 import { Logger, Inject, forwardRef } from '@nestjs/common';
-import { Role } from '@prisma/client';
 import { Server, Socket } from 'socket.io';
 import { Role } from '@prisma/client';
 import { TableLockService } from 'src/modules/tables/services/table-lock.service';
@@ -74,7 +73,6 @@ export class TablesGateway
         });
 
         if (user && user.isActive) {
-          client.data.user = user;
           await client.join(`user:${user.id}`);
           if (user.role === Role.ADMIN) {
             await client.join('admin:all');
