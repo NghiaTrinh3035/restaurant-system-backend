@@ -9,9 +9,11 @@ import {
   Post,
   Put,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import type { Request } from 'express';
 import { ReservationsService } from '../services/reservations.service';
 import { ReservationAvailabilityService } from '../services/reservation-availability.service';
 import { CreateReservationDto } from '../dto/create-reservation.dto';
@@ -43,9 +45,18 @@ export class ReservationsController {
   @ResponseMessage('Đặt bàn trực tuyến thành công.')
   async createReservation(
     @Body() dto: CreateReservationDto,
+    @Req() req: Request,
     @CurrentUser() user?: ICurrentUser,
-  ) {
-    return this.reservationsService.createReservation(dto, user);
+  ): Promise<Record<string, unknown>> {
+    const forwardedFor = req.headers['x-forwarded-for'];
+    const rawIp =
+      typeof forwardedFor === 'string'
+        ? forwardedFor
+        : Array.isArray(forwardedFor)
+          ? forwardedFor[0]
+          : req.ip;
+
+    return this.reservationsService.createReservation(dto, user, rawIp);
   }
 
   @Get('available-slots')

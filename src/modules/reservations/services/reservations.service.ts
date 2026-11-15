@@ -11,12 +11,13 @@ import { CreateReservationDto, PreOrderItemDto } from '../dto/create-reservation
 import { QueryReservationDto } from '../dto/query-reservation.dto';
 import { QueryMyReservationsDto, ReservationTimeline } from '../dto/query-my-reservations.dto';
 import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
-import { ReservationStatus, RestaurantTableStatus, Prisma, Role } from '@prisma/client';
+import { PaymentPurpose, ReservationStatus, RestaurantTableStatus, Prisma, Role } from '@prisma/client';
 import { TablesService } from 'src/modules/tables/services/tables.service';
 import { UpdateReservationStatusDto } from '../dto/update-reservation-status.dto';
 import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
 import { TableLockService } from 'src/modules/tables/services/table-lock.service';
 import { TablesGateway } from 'src/gateway/tables.gateway';
+import { PaymentsService } from 'src/modules/payments/services/payments.service';
 import {
   generateReservationCode,
   getLocalNow,
@@ -37,6 +38,15 @@ const ORDER_ALLOWED_STATUSES: ReservationStatus[] = [
   ReservationStatus.SEATED,
 ];
 
+type CreatedReservationPayload = Prisma.ReservationGetPayload<{
+  include: {
+    branch: true;
+    tableType: true;
+    table: true;
+    orders: { include: { menuItem: true } };
+  };
+}>;
+
 @Injectable()
 export class ReservationsService {
   private readonly logger = new Logger(ReservationsService.name);
@@ -48,9 +58,14 @@ export class ReservationsService {
     private readonly tablesGateway: TablesGateway,
     private readonly tablesService: TablesService,
     private readonly mailService: MailService,
+    private readonly paymentsService: PaymentsService,
   ) {}
 
-  async createReservation(dto: CreateReservationDto, user?: ICurrentUser) {
+  async createReservation(
+    dto: CreateReservationDto,
+    user?: ICurrentUser,
+    rawClientIp?: string,
+  ) {
     const branch = await this.availability.getBranchContext(dto.branchId);
     const window = this.availability.validateBookingTime(
       branch,
@@ -94,7 +109,7 @@ export class ReservationsService {
     const reservationCode = generateReservationCode(dto.reservationDate);
     const phone = dto.customerPhone.trim();
 
-    let created;
+    let created: CreatedReservationPayload | null = null;
     try {
       created = await this.prisma.$transaction(
         async (tx) => {
@@ -166,6 +181,10 @@ export class ReservationsService {
       throw err;
     }
 
+    if (!created) {
+      throw new BadRequestException('Không thể hoàn tất tạo đơn đặt bàn.');
+    }
+
     // Bàn đã chuyển sang trạng thái đã đặt: bỏ khóa tạm và báo realtime cho chi nhánh
     if (slot && user) {
       await this.tableLockService.consumeLock(slot, user.id);
@@ -176,6 +195,24 @@ export class ReservationsService {
       this.tablesGateway.notifyReservationCreated(dto.branchId, created);
     } catch {
       // Bỏ qua lỗi socket nếu có
+    }
+
+    if (dto.paymentProvider && preOrderLines.length > 0) {
+      const paymentRes = await this.paymentsService.createPayment(
+        {
+          provider: dto.paymentProvider,
+          purpose: PaymentPurpose.RESERVATION_DEPOSIT,
+          reservationId: created.id,
+        },
+        user,
+        rawClientIp,
+      );
+
+      return {
+        ...created,
+        payment: paymentRes,
+        payUrl: paymentRes.payUrl,
+      };
     }
 
     return created;
@@ -263,6 +300,20 @@ export class ReservationsService {
           tableType: true,
           table: true,
           orders: { include: { menuItem: true } },
+          payments: {
+            select: {
+              id: true,
+              transactionCode: true,
+              provider: true,
+              purpose: true,
+              status: true,
+              amount: true,
+              paidAt: true,
+              refundedAt: true,
+              refundReason: true,
+            },
+            orderBy: { createdAt: 'desc' },
+          },
         },
       }),
       this.prisma.reservation.count({ where }),
@@ -313,6 +364,20 @@ export class ReservationsService {
           tableType: true,
           table: true,
           orders: { include: { menuItem: true } },
+          payments: {
+            select: {
+              id: true,
+              transactionCode: true,
+              provider: true,
+              purpose: true,
+              status: true,
+              amount: true,
+              paidAt: true,
+              refundedAt: true,
+              refundReason: true,
+            },
+            orderBy: { createdAt: 'desc' },
+          },
         },
       }),
       this.prisma.reservation.count({ where }),
@@ -354,6 +419,20 @@ export class ReservationsService {
         tableType: true,
         table: true,
         orders: { include: { menuItem: true } },
+        payments: {
+          select: {
+            id: true,
+            transactionCode: true,
+            provider: true,
+            purpose: true,
+            status: true,
+            amount: true,
+            paidAt: true,
+            refundedAt: true,
+            refundReason: true,
+          },
+          orderBy: { createdAt: 'desc' },
+        },
       },
     });
 
@@ -385,14 +464,23 @@ export class ReservationsService {
       throw new BadRequestException('Đã đến giờ hẹn, không thể hủy trực tuyến. Vui lòng liên hệ nhà hàng.');
     }
 
+    const refundReason =
+      reason || (isCustomer ? 'Khách hàng yêu cầu hủy đặt bàn.' : 'Nhà hàng hủy đặt bàn.');
+
     const updated = await this.prisma.reservation.update({
       where: { id: reservation.id },
       data: {
         status: ReservationStatus.CANCELLED,
-        cancelledReason: reason || (isCustomer ? 'Khách hàng yêu cầu hủy đặt bàn.' : 'Nhà hàng hủy đặt bàn.'),
+        cancelledReason: refundReason,
       },
       include: { branch: true },
     });
+
+    try {
+      await this.paymentsService.markRefunded({ reservationId: reservation.id }, refundReason);
+    } catch (err) {
+      this.logger.error(`[Refund] Hoàn tiền đặt bàn thất bại cho ${reservation.reservationCode}:`, err);
+    }
 
     try {
       this.tablesGateway.notifyReservationUpdated(reservation.branchId, updated);
@@ -519,6 +607,17 @@ export class ReservationsService {
       },
     });
 
+    if (dto.status === ReservationStatus.CANCELLED) {
+      try {
+        await this.paymentsService.markRefunded(
+          { reservationId: reservation.id },
+          dto.note || 'Nhà hàng hủy đặt bàn',
+        );
+      } catch (err) {
+        this.logger.error(`[Refund] Hoàn tiền đặt bàn thất bại cho ${reservation.reservationCode}:`, err);
+      }
+    }
+
     // Nếu chuyển sang CONFIRMED -> Gửi email xác nhận đặt bàn cho khách hàng (bất đồng bộ)
     if (dto.status === ReservationStatus.CONFIRMED) {
       const recipientEmail = updated.customerEmail || updated.user?.email;
@@ -562,7 +661,7 @@ export class ReservationsService {
           { status: RestaurantTableStatus.OCCUPIED, note: `Khách ${reservation.customerName} đang dùng bữa` },
           user,
         );
-      } catch (err) {
+      } catch {
         // Tiếp tục dù lỗi socket
       }
     }
@@ -575,7 +674,7 @@ export class ReservationsService {
           { status: RestaurantTableStatus.DIRTY, note: `Khách vừa dùng bữa xong (${reservation.reservationCode})` },
           user,
         );
-      } catch (err) {
+      } catch {
         // Tiếp tục dù lỗi socket
       }
     }
@@ -594,7 +693,7 @@ export class ReservationsService {
             user,
           );
         }
-      } catch (err) {
+      } catch {
         // Tiếp tục dù lỗi socket
       }
     }

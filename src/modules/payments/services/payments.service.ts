@@ -605,6 +605,17 @@ export class PaymentsService {
             });
           }
 
+          if (
+            input.isSuccess &&
+            txRecord.purpose === PaymentPurpose.RESERVATION_DEPOSIT &&
+            txRecord.reservationId
+          ) {
+            await tx.reservation.updateMany({
+              where: { id: txRecord.reservationId, status: ReservationStatus.PENDING },
+              data: { status: ReservationStatus.CONFIRMED },
+            });
+          }
+
           return res.count;
         });
       } catch (err) {
@@ -638,6 +649,13 @@ export class PaymentsService {
             this.tablesGateway.server?.to(`branch:${branchId}`).emit('pickupOrder:statusChanged', {
               id: txRecord.pickupOrderId,
               status: PickupOrderStatus.CONFIRMED,
+            });
+          }
+
+          if (input.isSuccess && txRecord.reservationId) {
+            this.tablesGateway.server?.to(`branch:${branchId}`).emit('reservation:statusChanged', {
+              id: txRecord.reservationId,
+              status: ReservationStatus.CONFIRMED,
             });
           }
         } catch {
