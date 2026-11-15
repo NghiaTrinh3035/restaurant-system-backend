@@ -19,6 +19,7 @@ model User {
   refreshTokens RefreshToken[]
   reservations  Reservation[]
   pickupOrders  PickupOrder[]
+  payments      PaymentTransaction[]
 
   @@index([branchId, isActive])
   @@index([role, isActive])

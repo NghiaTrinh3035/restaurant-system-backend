@@ -101,6 +101,30 @@ export class EnvironmentVariables {
 
   @IsString({ message: 'CLOUDINARY_FOLDER bắt buộc và không được để trống' })
   CLOUDINARY_FOLDER: string;
+
+  @IsString({ message: 'PAYMENT_CALLBACK_BASE_URL bắt buộc và không được để trống' })
+  PAYMENT_CALLBACK_BASE_URL: string;
+
+  @IsString({ message: 'MOMO_PARTNER_CODE bắt buộc và không được để trống' })
+  MOMO_PARTNER_CODE: string;
+
+  @IsString({ message: 'MOMO_ACCESS_KEY bắt buộc và không được để trống' })
+  MOMO_ACCESS_KEY: string;
+
+  @IsString({ message: 'MOMO_SECRET_KEY bắt buộc và không được để trống' })
+  MOMO_SECRET_KEY: string;
+
+  @IsString({ message: 'MOMO_ENDPOINT bắt buộc và không được để trống' })
+  MOMO_ENDPOINT: string;
+
+  @IsString({ message: 'VNP_TMN_CODE bắt buộc và không được để trống' })
+  VNP_TMN_CODE: string;
+
+  @IsString({ message: 'VNP_HASH_SECRET bắt buộc và không được để trống' })
+  VNP_HASH_SECRET: string;
+
+  @IsString({ message: 'VNP_URL bắt buộc và không được để trống' })
+  VNP_URL: string;
 }
 
 export function validate(config: Record<string, unknown>) {

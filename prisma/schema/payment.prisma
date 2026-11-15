@@ -1,0 +1,51 @@
+enum PaymentProvider {
+  MOMO
+  VNPAY
+}
+
+enum PaymentPurpose {
+  RESERVATION_DEPOSIT
+  RESERVATION_SETTLEMENT
+  PICKUP_ORDER
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  EXPIRED
+  REFUNDED
+}
+
+model PaymentTransaction {
+  id                  String          @id @default(uuid()) @db.Uuid
+  transactionCode     String          @unique
+  provider            PaymentProvider
+  purpose             PaymentPurpose
+  status              PaymentStatus   @default(PENDING)
+  amount              Decimal         @db.Decimal(12, 2)
+  reservationId       String?         @db.Uuid
+  pickupOrderId       String?         @db.Uuid
+  userId              String?         @db.Uuid
+  gatewayTransId      String?         @unique
+  gatewayResponseCode String?
+  payUrl              String?
+  ipAddress           String?
+  rawCallbackPayload  Json?
+  expiresAt           DateTime
+  paidAt              DateTime?
+  refundedAt          DateTime?
+  refundReason        String?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  reservation         Reservation?    @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  pickupOrder         PickupOrder?    @relation(fields: [pickupOrderId], references: [id], onDelete: SetNull)
+  user                User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([reservationId, status])
+  @@index([pickupOrderId, status])
+  @@index([userId])
+  @@index([status, expiresAt])
+  @@map("payment_transactions")
+}
