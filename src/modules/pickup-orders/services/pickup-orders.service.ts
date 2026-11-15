@@ -13,8 +13,9 @@ import { QueryPickupOrderDto } from '../dtos/query-pickup-order.dto';
 import { UpdatePickupOrderStatusDto } from '../dtos/update-pickup-order-status.dto';
 import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
 import { PaginationQueryDto } from 'src/core/dto/pagination-query.dto';
-import { PickupOrderStatus, Prisma, Role } from '@prisma/client';
+import { PaymentPurpose, PickupOrderStatus, Prisma, Role } from '@prisma/client';
 import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
+import { PaymentsService } from 'src/modules/payments/services/payments.service';
 import {
   generatePickupCode,
   getLocalNow,
@@ -31,9 +32,14 @@ export class PickupOrdersService {
     private readonly prisma: PrismaService,
     private readonly tablesGateway: TablesGateway,
     private readonly mailService: MailService,
+    private readonly paymentsService: PaymentsService,
   ) {}
 
-  async createPickupOrder(dto: CreatePickupOrderDto, user?: ICurrentUser) {
+  async createPickupOrder(
+    dto: CreatePickupOrderDto,
+    user?: ICurrentUser,
+    rawClientIp?: string,
+  ) {
     const branch = await this.prisma.restaurantBranch.findUnique({
       where: { id: dto.branchId },
       include: { operatingHours: true },
@@ -195,6 +201,24 @@ export class PickupOrdersService {
       // Bỏ qua lỗi socket nếu có
     }
 
+    if (dto.paymentProvider && createdOrder) {
+      const paymentRes = await this.paymentsService.createPayment(
+        {
+          provider: dto.paymentProvider,
+          purpose: PaymentPurpose.PICKUP_ORDER,
+          pickupOrderId: createdOrder.id,
+        },
+        user,
+        rawClientIp,
+      );
+
+      return {
+        ...createdOrder,
+        payment: paymentRes,
+        payUrl: paymentRes.payUrl,
+      };
+    }
+
     return createdOrder;
   }
 
@@ -245,6 +269,19 @@ export class PickupOrdersService {
         include: {
           branch: { select: { id: true, name: true, phone: true, streetAddress: true } },
           items: { include: { menuItem: true } },
+          payments: {
+            select: {
+              id: true,
+              transactionCode: true,
+              provider: true,
+              status: true,
+              amount: true,
+              paidAt: true,
+              refundedAt: true,
+              refundReason: true,
+            },
+            orderBy: { createdAt: 'desc' },
+          },
         },
       }),
       this.prisma.pickupOrder.count({ where }),
@@ -274,6 +311,19 @@ export class PickupOrdersService {
         include: {
           branch: { select: { id: true, name: true, phone: true, streetAddress: true } },
           items: { include: { menuItem: true } },
+          payments: {
+            select: {
+              id: true,
+              transactionCode: true,
+              provider: true,
+              status: true,
+              amount: true,
+              paidAt: true,
+              refundedAt: true,
+              refundReason: true,
+            },
+            orderBy: { createdAt: 'desc' },
+          },
         },
       }),
       this.prisma.pickupOrder.count({ where }),
@@ -314,6 +364,19 @@ export class PickupOrdersService {
       include: {
         branch: true,
         items: { include: { menuItem: true } },
+        payments: {
+          select: {
+            id: true,
+            transactionCode: true,
+            provider: true,
+            status: true,
+            amount: true,
+            paidAt: true,
+            refundedAt: true,
+            refundReason: true,
+          },
+          orderBy: { createdAt: 'desc' },
+        },
       },
     });
 
@@ -343,17 +406,39 @@ export class PickupOrdersService {
       throw new BadRequestException('Không thể hủy đơn hàng ở trạng thái hiện tại.');
     }
 
+    const refundReason =
+      reason || (user?.role === Role.USER ? 'Khách yêu cầu hủy đơn' : 'Nhà hàng hủy đơn');
+
     const updated = await this.prisma.pickupOrder.update({
       where: { id: order.id },
       data: {
         status: PickupOrderStatus.CANCELLED,
-        cancelledReason: reason || (user?.role === Role.USER ? 'Khách yêu cầu hủy đơn' : 'Nhà hàng hủy đơn'),
+        cancelledReason: refundReason,
       },
       include: {
         branch: true,
         items: { include: { menuItem: true } },
+        payments: {
+          select: {
+            id: true,
+            transactionCode: true,
+            provider: true,
+            status: true,
+            amount: true,
+            paidAt: true,
+            refundedAt: true,
+            refundReason: true,
+          },
+          orderBy: { createdAt: 'desc' },
+        },
       },
     });
+
+    try {
+      await this.paymentsService.markRefunded({ pickupOrderId: order.id }, refundReason);
+    } catch (err) {
+      this.logger.error(`[Refund] Hoàn tiền thất bại cho đơn ${order.orderCode}:`, err);
+    }
 
     try {
       this.tablesGateway.server?.to(`branch:${order.branchId}`).emit('pickupOrder:statusChanged', updated);
@@ -390,6 +475,17 @@ export class PickupOrdersService {
       },
     });
 
+    if (dto.status === PickupOrderStatus.CANCELLED) {
+      try {
+        await this.paymentsService.markRefunded(
+          { pickupOrderId: order.id },
+          dto.cancelledReason || 'Nhà hàng hủy đơn',
+        );
+      } catch (err) {
+        this.logger.error(`[Refund] Hoàn tiền thất bại cho đơn ${order.orderCode}:`, err);
+      }
+    }
+
     // Gửi email thông báo món đã sẵn sàng khi bếp hoàn tất chế biến (status === READY)
     if (dto.status === PickupOrderStatus.READY) {
       const recipientEmail = updated.customerEmail || updated.user?.email;
@@ -423,9 +519,12 @@ export class PickupOrdersService {
   async verifyPickupCode(orderCodeInput: string, user: ICurrentUser) {
     let cleanCode = (orderCodeInput || '').trim();
     try {
-      const parsed = JSON.parse(cleanCode);
-      if (parsed && typeof parsed === 'object' && parsed.code) {
-        cleanCode = String(parsed.code).trim();
+      const parsed: unknown = JSON.parse(cleanCode);
+      if (typeof parsed === 'object' && parsed !== null && 'code' in parsed) {
+        const potentialCode = (parsed as Record<string, unknown>).code;
+        if (typeof potentialCode === 'string') {
+          cleanCode = potentialCode.trim();
+        }
       }
     } catch {
       // Chuỗi bình thường, không phải JSON
@@ -442,6 +541,19 @@ export class PickupOrdersService {
       include: {
         branch: true,
         items: { include: { menuItem: true } },
+        payments: {
+          select: {
+            id: true,
+            transactionCode: true,
+            provider: true,
+            status: true,
+            amount: true,
+            paidAt: true,
+            refundedAt: true,
+            refundReason: true,
+          },
+          orderBy: { createdAt: 'desc' },
+        },
       },
     });
 

@@ -633,6 +633,13 @@ export class PaymentsService {
             pickupOrderId: txRecord.pickupOrderId,
             reservationId: txRecord.reservationId,
           });
+
+          if (input.isSuccess && txRecord.pickupOrderId) {
+            this.tablesGateway.server?.to(`branch:${branchId}`).emit('pickupOrder:statusChanged', {
+              id: txRecord.pickupOrderId,
+              status: PickupOrderStatus.CONFIRMED,
+            });
+          }
         } catch {
           // Bỏ qua lỗi phát sóng WebSocket để không ảnh hưởng kết quả thanh toán đã lưu
         }

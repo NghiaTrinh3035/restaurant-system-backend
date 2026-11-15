@@ -2,6 +2,7 @@ import {
   IsArray,
   IsDateString,
   IsEmail,
+  IsEnum,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -15,6 +16,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PaymentProvider } from '@prisma/client';
 
 export class PickupOrderItemDto {
   @ApiProperty({ description: 'ID món ăn trong thực đơn', example: 'd3b07384-d113-44f2-9523-228cfb045167' })
@@ -70,6 +72,15 @@ export class CreatePickupOrderDto {
   @IsOptional()
   @IsString()
   specialNotes?: string;
+
+  @ApiPropertyOptional({
+    description: 'Cổng thanh toán trực tuyến (MOMO hoặc VNPAY)',
+    enum: PaymentProvider,
+    example: PaymentProvider.MOMO,
+  })
+  @IsOptional()
+  @IsEnum(PaymentProvider, { message: 'Cổng thanh toán phải là MOMO hoặc VNPAY' })
+  paymentProvider?: PaymentProvider;
 
   @ApiProperty({ description: 'Danh sách món ăn đặt trước', type: [PickupOrderItemDto] })
   @IsArray()
