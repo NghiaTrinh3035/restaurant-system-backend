@@ -15,12 +15,14 @@ import {
   PickupOrderStatus,
   Prisma,
   ReservationStatus,
+  RestaurantTableStatus,
   Role,
 } from '@prisma/client';
 import * as crypto from 'crypto';
 import type Redis from 'ioredis';
 import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
 import { TablesGateway } from 'src/gateway/tables.gateway';
+import { MailService } from 'src/mail/mail.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { REDIS_CLIENT } from 'src/redis/redis.module';
 import { CreatePaymentDto } from '../dto/create-payment.dto';
@@ -62,6 +64,7 @@ export class PaymentsService {
     private readonly momoGateway: MomoGatewayService,
     private readonly vnpayGateway: VnpayGatewayService,
     private readonly tablesGateway: TablesGateway,
+    private readonly mailService: MailService,
   ) {}
 
   async createPayment(
@@ -548,7 +551,7 @@ export class PaymentsService {
         where: { transactionCode: input.transactionCode },
         include: {
           pickupOrder: { select: { id: true, branchId: true, status: true } },
-          reservation: { select: { id: true, branchId: true, status: true } },
+          reservation: { select: { id: true, branchId: true, status: true, tableId: true } },
         },
       });
 
@@ -616,6 +619,27 @@ export class PaymentsService {
             });
           }
 
+          if (
+            input.isSuccess &&
+            txRecord.purpose === PaymentPurpose.RESERVATION_SETTLEMENT &&
+            txRecord.reservationId
+          ) {
+            await tx.reservation.updateMany({
+              where: {
+                id: txRecord.reservationId,
+                status: { in: [ReservationStatus.SEATED, ReservationStatus.CONFIRMED] },
+              },
+              data: { status: ReservationStatus.COMPLETED },
+            });
+
+            if (txRecord.reservation?.tableId) {
+              await tx.restaurantTable.updateMany({
+                where: { id: txRecord.reservation.tableId },
+                data: { status: RestaurantTableStatus.DIRTY },
+              });
+            }
+          }
+
           return res.count;
         });
       } catch (err) {
@@ -653,10 +677,34 @@ export class PaymentsService {
           }
 
           if (input.isSuccess && txRecord.reservationId) {
+            const nextStatus =
+              txRecord.purpose === PaymentPurpose.RESERVATION_SETTLEMENT
+                ? ReservationStatus.COMPLETED
+                : ReservationStatus.CONFIRMED;
+
             this.tablesGateway.server?.to(`branch:${branchId}`).emit('reservation:statusChanged', {
               id: txRecord.reservationId,
-              status: ReservationStatus.CONFIRMED,
+              status: nextStatus,
             });
+
+            if (
+              txRecord.purpose === PaymentPurpose.RESERVATION_SETTLEMENT &&
+              txRecord.reservation?.tableId
+            ) {
+              this.tablesGateway.notifyTableStatusChanged(branchId, {
+                tableId: txRecord.reservation.tableId,
+                status: RestaurantTableStatus.DIRTY,
+              });
+
+              this.sendSettlementInvoiceEmail(
+                txRecord.reservationId,
+                txRecord.transactionCode,
+                txRecord.provider,
+                Number(txRecord.amount),
+              ).catch((err) => {
+                this.logger.error('[Mail] Gửi email hóa đơn quyết toán thất bại:', err);
+              });
+            }
           }
         } catch {
           // Bỏ qua lỗi phát sóng WebSocket để không ảnh hưởng kết quả thanh toán đã lưu
@@ -671,6 +719,71 @@ export class PaymentsService {
         this.logger.warn(`Không thể giải phóng Redis lock ${lockKey}:`, err);
       }
     }
+  }
+
+  private async sendSettlementInvoiceEmail(
+    reservationId: string,
+    transactionCode: string,
+    provider: PaymentProvider,
+    settlementAmount: number,
+  ) {
+    const reservation = await this.prisma.reservation.findUnique({
+      where: { id: reservationId },
+      include: {
+        branch: true,
+        table: true,
+        orders: { include: { menuItem: true } },
+        payments: { where: { status: PaymentStatus.SUCCESS } },
+        user: { select: { email: true } },
+      },
+    });
+
+    if (!reservation) return;
+    const recipientEmail = reservation.customerEmail || reservation.user?.email;
+    if (!recipientEmail) return;
+
+    const totalFoodAmount = reservation.orders.reduce(
+      (sum, o) => sum + Number(o.unitPrice) * o.quantity,
+      0,
+    );
+    const depositAmount = reservation.payments
+      .filter((p) => p.purpose === PaymentPurpose.RESERVATION_DEPOSIT)
+      .reduce((sum, p) => sum + Number(p.amount), 0);
+
+    const dateStr =
+      reservation.reservationDate instanceof Date
+        ? reservation.reservationDate.toISOString().slice(0, 10)
+        : String(reservation.reservationDate).slice(0, 10);
+
+    const providerLabel =
+      provider === PaymentProvider.MOMO
+        ? 'Ví MoMo'
+        : provider === PaymentProvider.VNPAY
+          ? 'Cổng VNPay'
+          : 'Tiền mặt tại quầy';
+
+    await this.mailService.sendReservationInvoiceEmail(recipientEmail, {
+      customerName: reservation.customerName,
+      reservationCode: reservation.reservationCode,
+      branchName: reservation.branch?.name || 'FoodHub Restaurant',
+      branchAddress: reservation.branch?.address || reservation.branch?.streetAddress || null,
+      branchPhone: reservation.branch?.phone || null,
+      reservationDate: dateStr,
+      reservationTime: reservation.reservationTime,
+      tableName: reservation.table?.tableNumber || null,
+      floor: reservation.table?.floor || null,
+      items: reservation.orders.map((o) => ({
+        name: o.menuItem?.name || 'Món ăn',
+        quantity: o.quantity,
+        unitPrice: Number(o.unitPrice),
+        subtotal: Number(o.unitPrice) * o.quantity,
+      })),
+      totalFoodAmount,
+      depositAmount,
+      settlementAmount,
+      paymentMethod: providerLabel,
+      transactionCode,
+    });
   }
 
   private sanitizePayloadForStorage(rawPayload: Record<string, unknown>): Prisma.InputJsonValue {

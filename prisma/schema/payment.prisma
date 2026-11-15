@@ -1,6 +1,7 @@
 enum PaymentProvider {
   MOMO
   VNPAY
+  CASH
 }
 
 enum PaymentPurpose {

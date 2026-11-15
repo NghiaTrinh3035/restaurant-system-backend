@@ -10,6 +10,7 @@ import {
 import type Redis from 'ioredis';
 import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
 import type { TablesGateway } from 'src/gateway/tables.gateway';
+import type { MailService } from 'src/mail/mail.service';
 import type { PrismaService } from 'src/prisma/prisma.service';
 import { hmacSha256Hex, hmacSha512Hex } from '../helpers/payment-crypto.helper';
 import { MomoGatewayService } from './momo-gateway.service';
@@ -183,6 +184,12 @@ describe('PaymentsModule security & transaction handling', () => {
 
       const tablesGateway = {
         notifyPaymentUpdated: jest.fn(),
+        notifyTableStatusChanged: jest.fn(),
+        server: { to: jest.fn().mockReturnValue({ emit: jest.fn() }) },
+      };
+
+      const mailService = {
+        sendReservationInvoiceEmail: jest.fn().mockResolvedValue(undefined),
       };
 
       const service = new PaymentsService(
@@ -191,9 +198,10 @@ describe('PaymentsModule security & transaction handling', () => {
         momoGateway,
         vnpayGateway,
         tablesGateway as unknown as TablesGateway,
+        mailService as unknown as MailService,
       );
 
-      return { service, prisma, tx, redis, tablesGateway, vnpayGateway, momoGateway };
+      return { service, prisma, tx, redis, tablesGateway, vnpayGateway, momoGateway, mailService };
     };
 
     const customer: ICurrentUser = {

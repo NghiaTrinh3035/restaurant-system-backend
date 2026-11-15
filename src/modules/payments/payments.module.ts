@@ -1,12 +1,13 @@
 import { Module } from '@nestjs/common';
 import { GatewayModule } from 'src/gateway/gateway.module';
+import { MailModule } from 'src/mail/mail.module';
 import { PaymentsController } from './controllers/payments.controller';
 import { MomoGatewayService } from './services/momo-gateway.service';
 import { PaymentsService } from './services/payments.service';
 import { VnpayGatewayService } from './services/vnpay-gateway.service';
 
 @Module({
-  imports: [GatewayModule],
+  imports: [GatewayModule, MailModule],
   controllers: [PaymentsController],
   providers: [PaymentsService, MomoGatewayService, VnpayGatewayService],
   exports: [PaymentsService],

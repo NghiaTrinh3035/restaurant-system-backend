@@ -11,13 +11,23 @@ import { CreateReservationDto, PreOrderItemDto } from '../dto/create-reservation
 import { QueryReservationDto } from '../dto/query-reservation.dto';
 import { QueryMyReservationsDto, ReservationTimeline } from '../dto/query-my-reservations.dto';
 import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
-import { PaymentPurpose, ReservationStatus, RestaurantTableStatus, Prisma, Role } from '@prisma/client';
+import {
+  PaymentProvider,
+  PaymentPurpose,
+  PaymentStatus,
+  ReservationStatus,
+  RestaurantTableStatus,
+  Prisma,
+  Role,
+} from '@prisma/client';
 import { TablesService } from 'src/modules/tables/services/tables.service';
 import { UpdateReservationStatusDto } from '../dto/update-reservation-status.dto';
+import { SettleBillDto } from '../dto/settle-bill.dto';
 import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
 import { TableLockService } from 'src/modules/tables/services/table-lock.service';
 import { TablesGateway } from 'src/gateway/tables.gateway';
 import { PaymentsService } from 'src/modules/payments/services/payments.service';
+import { generateTransactionCode } from 'src/modules/payments/helpers/payment-crypto.helper';
 import {
   generateReservationCode,
   getLocalNow,
@@ -719,5 +729,250 @@ export class ReservationsService {
       { status: ReservationStatus.SEATED, note: 'Khách đã quét mã QR check-in tại quầy' },
       user,
     );
+  }
+
+  async getReservationBill(id: string, user?: ICurrentUser) {
+    const reservation = await this.prisma.reservation.findFirst({
+      where: {
+        OR: [{ id: id.includes('-') && id.length === 36 ? id : undefined }, { reservationCode: id }],
+      },
+      include: {
+        branch: { select: { id: true, name: true, phone: true, streetAddress: true, address: true } },
+        table: { select: { id: true, tableNumber: true, floor: true } },
+        orders: {
+          include: {
+            menuItem: { select: { id: true, name: true, imageUrl: true } },
+          },
+        },
+        payments: {
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            transactionCode: true,
+            provider: true,
+            purpose: true,
+            status: true,
+            amount: true,
+            paidAt: true,
+            createdAt: true,
+          },
+        },
+        user: { select: { id: true, fullName: true, email: true, phone: true } },
+      },
+    });
+
+    if (!reservation) {
+      throw new NotFoundException('Không tìm thấy thông tin đặt bàn.');
+    }
+
+    if (user && user.role === Role.USER && reservation.userId && reservation.userId !== user.id) {
+      throw new ForbiddenException('Bạn không có quyền truy cập hóa đơn đặt bàn này.');
+    }
+
+    const items = reservation.orders.map((o) => {
+      const unitPrice = Number(o.unitPrice);
+      const subtotal = unitPrice * o.quantity;
+      return {
+        id: o.id,
+        menuItemId: o.menuItemId,
+        name: o.menuItem ? o.menuItem.name : 'Món ăn',
+        quantity: o.quantity,
+        unitPrice,
+        subtotal,
+        note: o.note ? o.note : null,
+        imageUrl: o.menuItem && o.menuItem.imageUrl ? o.menuItem.imageUrl : null,
+      };
+    });
+
+    const totalFoodAmount = items.reduce((sum, item) => sum + item.subtotal, 0);
+
+    const successPayments = reservation.payments.filter((p) => p.status === PaymentStatus.SUCCESS);
+
+    const depositAmount = successPayments
+      .filter((p) => p.purpose === PaymentPurpose.RESERVATION_DEPOSIT)
+      .reduce((sum, p) => sum + Number(p.amount), 0);
+
+    const settlementAmount = successPayments
+      .filter((p) => p.purpose === PaymentPurpose.RESERVATION_SETTLEMENT)
+      .reduce((sum, p) => sum + Number(p.amount), 0);
+
+    const remainingAmount = Math.max(0, totalFoodAmount - depositAmount - settlementAmount);
+    const isSettled = remainingAmount === 0 || reservation.status === ReservationStatus.COMPLETED;
+
+    return {
+      reservationId: reservation.id,
+      reservationCode: reservation.reservationCode,
+      status: reservation.status,
+      reservationDate: reservation.reservationDate,
+      reservationTime: reservation.reservationTime,
+      slotDurationMinutes: reservation.slotDurationMinutes,
+      customerName: reservation.customerName,
+      customerPhone: reservation.customerPhone,
+      customerEmail: reservation.customerEmail
+        ? reservation.customerEmail
+        : reservation.user
+          ? reservation.user.email
+          : null,
+      branch: reservation.branch,
+      table: reservation.table,
+      items,
+      totalFoodAmount,
+      depositAmount,
+      settlementAmount,
+      remainingAmount,
+      isSettled,
+      payments: reservation.payments.map((p) => ({
+        ...p,
+        amount: Number(p.amount),
+      })),
+    };
+  }
+
+  async settleReservationBill(
+    id: string,
+    dto: SettleBillDto,
+    user: ICurrentUser,
+    rawClientIp?: string,
+  ) {
+    const reservation = await this.getReservationById(id, user);
+
+    if (user.role === Role.STAFF && user.branchId && reservation.branchId !== user.branchId) {
+      throw new ForbiddenException('Bạn chỉ có quyền quyết toán hóa đơn thuộc chi nhánh của mình.');
+    }
+
+    if (reservation.status === ReservationStatus.COMPLETED) {
+      throw new BadRequestException('Hóa đơn đặt bàn này đã được quyết toán hoàn tất trước đó.');
+    }
+
+    if (
+      reservation.status === ReservationStatus.CANCELLED ||
+      reservation.status === ReservationStatus.NO_SHOW
+    ) {
+      throw new BadRequestException('Đơn đặt bàn đã hủy hoặc vắng mặt, không thể quyết toán hóa đơn.');
+    }
+
+    const bill = await this.getReservationBill(reservation.id, user);
+
+    // Trường hợp thanh toán trực tuyến qua MoMo hoặc VNPay
+    if (dto.paymentMethod === PaymentProvider.MOMO || dto.paymentMethod === PaymentProvider.VNPAY) {
+      if (bill.remainingAmount <= 0) {
+        throw new BadRequestException('Hóa đơn không có số dư cần thanh toán trực tuyến.');
+      }
+
+      return this.paymentsService.createPayment(
+        {
+          provider: dto.paymentMethod,
+          purpose: PaymentPurpose.RESERVATION_SETTLEMENT,
+          reservationId: reservation.id,
+        },
+        user,
+        rawClientIp,
+      );
+    }
+
+    // Trường hợp thanh toán tiền mặt (CASH) tại quầy
+    const transactionCode = generateTransactionCode('CASH');
+    const now = new Date();
+
+    await this.prisma.$transaction(async (tx) => {
+      if (bill.remainingAmount > 0) {
+        await tx.paymentTransaction.create({
+          data: {
+            transactionCode,
+            provider: PaymentProvider.CASH,
+            purpose: PaymentPurpose.RESERVATION_SETTLEMENT,
+            status: PaymentStatus.SUCCESS,
+            amount: bill.remainingAmount,
+            reservationId: reservation.id,
+            userId: reservation.userId ? reservation.userId : null,
+            paidAt: now,
+            expiresAt: now,
+          },
+        });
+      }
+
+      await tx.reservation.update({
+        where: { id: reservation.id },
+        data: {
+          status: ReservationStatus.COMPLETED,
+        },
+      });
+
+      if (reservation.tableId) {
+        await tx.restaurantTable.updateMany({
+          where: { id: reservation.tableId },
+          data: { status: RestaurantTableStatus.DIRTY },
+        });
+      }
+    });
+
+    const updatedBill = await this.getReservationBill(reservation.id, user);
+
+    // Phát sóng socket cập nhật cho toàn chi nhánh
+    try {
+      this.tablesGateway.server?.to(`branch:${reservation.branchId}`).emit('reservation:statusChanged', {
+        id: reservation.id,
+        status: ReservationStatus.COMPLETED,
+      });
+
+      if (reservation.tableId) {
+        this.tablesGateway.notifyTableStatusChanged(reservation.branchId, {
+          tableId: reservation.tableId,
+          status: RestaurantTableStatus.DIRTY,
+        });
+      }
+
+      this.tablesGateway.notifyPaymentUpdated(reservation.branchId, {
+        transactionCode,
+        provider: PaymentProvider.CASH,
+        purpose: PaymentPurpose.RESERVATION_SETTLEMENT,
+        status: PaymentStatus.SUCCESS,
+        amount: bill.remainingAmount,
+        reservationId: reservation.id,
+      });
+    } catch {
+      // Bỏ qua lỗi socket
+    }
+
+    // Gửi email hóa đơn quyết toán bất đồng bộ
+    if (updatedBill.customerEmail) {
+      const dateStr =
+        reservation.reservationDate instanceof Date
+          ? reservation.reservationDate.toISOString().slice(0, 10)
+          : String(reservation.reservationDate).slice(0, 10);
+
+      this.mailService
+        .sendReservationInvoiceEmail(updatedBill.customerEmail, {
+          customerName: updatedBill.customerName,
+          reservationCode: updatedBill.reservationCode,
+          branchName: updatedBill.branch ? updatedBill.branch.name : 'FoodHub Restaurant',
+          branchAddress: updatedBill.branch
+            ? updatedBill.branch.streetAddress
+              ? updatedBill.branch.streetAddress
+              : updatedBill.branch.address
+            : null,
+          branchPhone: updatedBill.branch ? updatedBill.branch.phone : null,
+          reservationDate: dateStr,
+          reservationTime: updatedBill.reservationTime,
+          tableName: updatedBill.table ? updatedBill.table.tableNumber : null,
+          floor: updatedBill.table ? updatedBill.table.floor : null,
+          items: updatedBill.items.map((i) => ({
+            name: i.name,
+            quantity: i.quantity,
+            unitPrice: i.unitPrice,
+            subtotal: i.subtotal,
+          })),
+          totalFoodAmount: updatedBill.totalFoodAmount,
+          depositAmount: updatedBill.depositAmount,
+          settlementAmount: bill.remainingAmount,
+          paymentMethod: 'Tiền mặt tại quầy',
+          transactionCode,
+        })
+        .catch((err) => {
+          this.logger.error('[Mail] Gửi email hóa đơn tiền mặt thất bại:', err);
+        });
+    }
+
+    return updatedBill;
   }
 }
