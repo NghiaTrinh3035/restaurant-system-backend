@@ -5,6 +5,7 @@ import { redisConfig } from './redis.config';
 import { mailConfig } from './mail.config';
 import { oauthConfig } from './oauth.config';
 import { cloudinaryConfig } from './cloudinary.config';
+import { paymentConfig } from './payment.config';
 
 export * from './env.validation';
 export * from './app.config';
@@ -14,6 +15,7 @@ export * from './redis.config';
 export * from './mail.config';
 export * from './oauth.config';
 export * from './cloudinary.config';
+export * from './payment.config';
 
 export const configs = [
   appConfig,
@@ -23,4 +25,5 @@ export const configs = [
   mailConfig,
   oauthConfig,
   cloudinaryConfig,
+  paymentConfig,
 ];

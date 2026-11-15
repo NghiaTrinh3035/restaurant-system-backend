@@ -6,9 +6,10 @@ import { PrismaModule } from 'src/prisma/prisma.module';
 import { TablesModule } from 'src/modules/tables/tables.module';
 import { GatewayModule } from 'src/gateway/gateway.module';
 import { MailModule } from 'src/mail/mail.module';
+import { PaymentsModule } from '../payments/payments.module';
 
 @Module({
-  imports: [PrismaModule, TablesModule, GatewayModule, MailModule],
+  imports: [PrismaModule, TablesModule, GatewayModule, MailModule, PaymentsModule],
   controllers: [ReservationsController],
   providers: [ReservationsService, ReservationAvailabilityService],
   exports: [ReservationsService],

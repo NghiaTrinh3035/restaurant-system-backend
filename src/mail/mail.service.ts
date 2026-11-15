@@ -15,6 +15,10 @@ import {
   buildPickupOrderReadyEmailTemplate,
   PickupOrderReadyEmailData,
 } from './templates/pickup-order-ready.template';
+import {
+  buildReservationInvoiceEmailTemplate,
+  ReservationInvoiceEmailData,
+} from './templates/reservation-invoice.template';
 
 export interface SendMailOptions {
   to: string;
@@ -121,13 +125,14 @@ export class MailService {
         throw new Error(`Google Apps Script trả về mã HTTP ${response.status}: ${response.statusText}`);
       }
 
-      const result: any = await response.json().catch(async () => {
+      const rawResult = (await response.json().catch(async () => {
         const text = await response.text();
         return { message: text };
-      });
+      })) as Record<string, unknown> | null;
 
-      if (result && result.success === false) {
-        const errDetail = result.message ? result.message : 'Lỗi không xác định từ GAS';
+      if (rawResult && rawResult.success === false) {
+        const errDetail =
+          typeof rawResult.message === 'string' ? rawResult.message : 'Lỗi không xác định từ GAS';
         throw new Error(`Google Apps Script báo lỗi: ${errDetail}`);
       }
 
@@ -208,6 +213,25 @@ export class MailService {
       html,
       type: 'PICKUP_ORDER_READY',
       data: { orderCode: data.orderCode },
+    });
+  }
+
+  /**
+   * Gửi email hóa đơn quyết toán bàn khi bữa ăn hoàn tất.
+   */
+  async sendReservationInvoiceEmail(
+    to: string,
+    data: ReservationInvoiceEmailData,
+  ): Promise<void> {
+    const subject = `🧾 Hóa đơn thanh toán bữa ăn [${data.reservationCode}] — FoodHub`;
+    const html = buildReservationInvoiceEmailTemplate(data);
+
+    await this.sendMail({
+      to,
+      subject,
+      html,
+      type: 'RESERVATION_INVOICE',
+      data: { reservationCode: data.reservationCode },
     });
   }
 }

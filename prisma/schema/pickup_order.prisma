@@ -16,8 +16,9 @@ model PickupOrder {
   updatedAt       DateTime          @updatedAt
 
   branch          RestaurantBranch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  user            User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user            User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
   items           PickupOrderItem[]
+  payments        PaymentTransaction[]
 
   @@index([branchId, pickupDate])
   @@index([userId])
