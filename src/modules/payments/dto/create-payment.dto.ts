@@ -8,7 +8,7 @@ export class CreatePaymentDto {
     enum: PaymentProvider,
     example: PaymentProvider.MOMO,
   })
-  @IsEnum(PaymentProvider, { message: 'Phương thức thanh toán phải là MOMO.' })
+  @IsEnum(PaymentProvider, { message: 'Phương thức thanh toán phải là MOMO hoặc SEPAY.' })
   @IsNotEmpty({ message: 'Vui lòng chọn phương thức thanh toán.' })
   provider: PaymentProvider;
 

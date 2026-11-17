@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -20,6 +21,7 @@ import type { ICurrentUser } from 'src/core/common/interfaces/current-user.inter
 import { CreatePaymentDto } from '../dto/create-payment.dto';
 import { QueryPaymentDto } from '../dto/query-payment.dto';
 import type { MomoCallbackRawPayload } from '../services/momo-gateway.service';
+import type { SepayIpnPayload } from '../services/sepay-gateway.service';
 import { PaymentsService } from '../services/payments.service';
 
 @ApiTags('Payments')
@@ -59,6 +61,24 @@ export class PaymentsController {
     return res.status(HttpStatus.NO_CONTENT).send();
   }
 
+  @Post('sepay/ipn')
+  @Public()
+  @ApiOperation({ summary: 'Webhook IPN nhận kết quả thanh toán từ SePay' })
+  async handleSepayIpn(
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Body() payload: SepayIpnPayload,
+    @Res() res: Response,
+  ) {
+    const result = await this.paymentsService.handleSepayIpn(headers, payload);
+    if (!result.accepted) {
+      if (result.reason === 'INVALID_SECRET_KEY') {
+        return res.status(HttpStatus.UNAUTHORIZED).json({ error: 'Unauthorized' });
+      }
+      return res.status(HttpStatus.BAD_REQUEST).json({ success: false, reason: result.reason });
+    }
+    return res.status(HttpStatus.OK).json({ success: true });
+  }
+
   @Get('momo/verify')
   @Public()
   @HttpCode(HttpStatus.OK)
@@ -66,6 +86,15 @@ export class PaymentsController {
   @ResponseMessage('Xác thực kết quả thanh toán MoMo thành công.')
   async verifyMomoReturn(@Query() query: Record<string, unknown>) {
     return this.paymentsService.verifyReturn(PaymentProvider.MOMO, query);
+  }
+
+  @Get('sepay/verify')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Xác thực Return URL khi khách quay về từ SePay' })
+  @ResponseMessage('Xác thực kết quả thanh toán SePay thành công.')
+  async verifySepayReturn(@Query() query: Record<string, unknown>) {
+    return this.paymentsService.verifyReturn(PaymentProvider.SEPAY, query);
   }
 
   @Get()

@@ -37,6 +37,7 @@ import { CreatePaymentDto } from '../dto/create-payment.dto';
 import { QueryPaymentDto } from '../dto/query-payment.dto';
 import { generateTransactionCode, normalizeClientIp } from '../helpers/payment-crypto.helper';
 import { MomoCallbackRawPayload, MomoGatewayService } from './momo-gateway.service';
+import { SepayGatewayService, SepayIpnPayload } from './sepay-gateway.service';
 
 const PAYMENT_EXPIRY_MINUTES = 15;
 const PAYMENT_LOCK_TTL_MS = 15000;
@@ -69,6 +70,7 @@ export class PaymentsService {
     private readonly prisma: PrismaService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly momoGateway: MomoGatewayService,
+    private readonly sepayGateway: SepayGatewayService,
     private readonly tablesGateway: TablesGateway,
     private readonly mailService: MailService,
   ) {}
@@ -80,7 +82,7 @@ export class PaymentsService {
   ) {
     const clientIp = normalizeClientIp(rawClientIp);
     const target = await this.resolveTargetAndAmount(dto, user);
-    const prefix = dto.provider === PaymentProvider.MOMO ? 'MM' : 'VN';
+    const prefix = dto.provider === PaymentProvider.MOMO ? 'MM' : dto.provider === PaymentProvider.SEPAY ? 'SP' : 'PAY';
     const transactionCode = generateTransactionCode(prefix);
     const expiresAt = new Date(Date.now() + PAYMENT_EXPIRY_MINUTES * 60 * 1000);
 
@@ -115,6 +117,12 @@ export class PaymentsService {
     try {
       if (dto.provider === PaymentProvider.MOMO) {
         payUrl = await this.momoGateway.createPayment({
+          transactionCode: transaction.transactionCode,
+          amount: target.amount,
+          orderInfo: target.orderInfo,
+        });
+      } else if (dto.provider === PaymentProvider.SEPAY) {
+        payUrl = await this.sepayGateway.createPayment({
           transactionCode: transaction.transactionCode,
           amount: target.amount,
           orderInfo: target.orderInfo,
@@ -179,14 +187,14 @@ export class PaymentsService {
     return { accepted: true };
   }
 
-  async verifyReturn(provider: PaymentProvider, rawQuery: Record<string, unknown>) {
-    if (provider !== PaymentProvider.MOMO) {
-      throw new BadRequestException('Cổng thanh toán không được hỗ trợ.');
-    }
-    const verified = this.momoGateway.verifyCallback(rawQuery);
-
-    if (!verified.isValidSignature) {
-      throw new BadRequestException('Chữ ký xác thực từ cổng thanh toán không hợp lệ.');
+  async handleSepayIpn(
+    headers: Record<string, string | string[] | undefined>,
+    payload: SepayIpnPayload,
+  ): Promise<{ accepted: boolean; reason?: string }> {
+    const verified = this.sepayGateway.verifyIpn(headers, payload);
+    if (!verified.isValidSecret) {
+      this.logger.warn(`Từ chối SePay IPN do Secret Key không hợp lệ: order_invoice_number=${verified.transactionCode}`);
+      return { accepted: false, reason: 'INVALID_SECRET_KEY' };
     }
 
     const outcome = await this.processGatewayVerification({
@@ -195,18 +203,58 @@ export class PaymentsService {
       isSuccess: verified.isSuccess,
       gatewayTransId: verified.gatewayTransId,
       responseCode: verified.responseCode,
-      rawPayload: rawQuery,
+      rawPayload: payload as unknown as Record<string, unknown>,
     });
 
-    if (outcome === 'NOT_FOUND') {
-      throw new NotFoundException('Không tìm thấy giao dịch thanh toán.');
-    }
-    if (outcome === 'AMOUNT_MISMATCH') {
-      throw new BadRequestException('Số tiền thanh toán không khớp với dữ liệu hệ thống.');
+    if (outcome === 'NOT_FOUND' || outcome === 'AMOUNT_MISMATCH') {
+      return { accepted: false, reason: outcome };
     }
 
+    return { accepted: true };
+  }
+
+  async verifyReturn(provider: PaymentProvider, rawQuery: Record<string, unknown>) {
+    if (provider === PaymentProvider.MOMO) {
+      const verified = this.momoGateway.verifyCallback(rawQuery);
+
+      if (!verified.isValidSignature) {
+        throw new BadRequestException('Chữ ký xác thực từ cổng thanh toán không hợp lệ.');
+      }
+
+      const outcome = await this.processGatewayVerification({
+        transactionCode: verified.transactionCode,
+        amount: verified.amount,
+        isSuccess: verified.isSuccess,
+        gatewayTransId: verified.gatewayTransId,
+        responseCode: verified.responseCode,
+        rawPayload: rawQuery,
+      });
+
+      if (outcome === 'NOT_FOUND') {
+        throw new NotFoundException('Không tìm thấy giao dịch thanh toán.');
+      }
+      if (outcome === 'AMOUNT_MISMATCH') {
+        throw new BadRequestException('Số tiền thanh toán không khớp với dữ liệu hệ thống.');
+      }
+
+      return this.fetchTransactionDetails(verified.transactionCode);
+    }
+
+    if (provider === PaymentProvider.SEPAY) {
+      const code = rawQuery.order_invoice_number ?? rawQuery.transactionCode;
+      const transactionCode = typeof code === 'string' ? code : '';
+      if (!transactionCode) {
+        throw new BadRequestException('Thiếu mã giao dịch thanh toán.');
+      }
+      return this.fetchTransactionDetails(transactionCode);
+    }
+
+    throw new BadRequestException('Cổng thanh toán không được hỗ trợ.');
+  }
+
+  private async fetchTransactionDetails(transactionCode: string) {
     const tx = await this.prisma.paymentTransaction.findUnique({
-      where: { transactionCode: verified.transactionCode },
+      where: { transactionCode },
       select: {
         id: true,
         transactionCode: true,

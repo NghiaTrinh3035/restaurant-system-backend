@@ -6,6 +6,10 @@ export function hmacSha256Hex(secret: string, data: string): string {
   return crypto.createHmac('sha256', secret).update(data, 'utf8').digest('hex');
 }
 
+export function hmacSha256Base64(secret: string, data: string): string {
+  return crypto.createHmac('sha256', secret).update(data, 'utf8').digest('base64');
+}
+
 export function timingSafeEqualHex(expectedHex: string, receivedHex: string): boolean {
   if (!expectedHex || !receivedHex) {
     return false;
@@ -14,6 +18,18 @@ export function timingSafeEqualHex(expectedHex: string, receivedHex: string): bo
   const normalizedReceived = receivedHex.trim().toLowerCase();
   const expectedBuf = Buffer.from(normalizedExpected, 'utf8');
   const receivedBuf = Buffer.from(normalizedReceived, 'utf8');
+  if (expectedBuf.length !== receivedBuf.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(expectedBuf, receivedBuf);
+}
+
+export function timingSafeEqualString(expected: string, received: string): boolean {
+  if (!expected || !received) {
+    return false;
+  }
+  const expectedBuf = Buffer.from(expected.trim(), 'utf8');
+  const receivedBuf = Buffer.from(received.trim(), 'utf8');
   if (expectedBuf.length !== receivedBuf.length) {
     return false;
   }

@@ -74,12 +74,12 @@ export class CreatePickupOrderDto {
   specialNotes?: string;
 
   @ApiPropertyOptional({
-    description: 'Cổng thanh toán trực tuyến (MOMO)',
+    description: 'Cổng thanh toán trực tuyến (MOMO, SEPAY)',
     enum: PaymentProvider,
     example: PaymentProvider.MOMO,
   })
   @IsOptional()
-  @IsEnum(PaymentProvider, { message: 'Cổng thanh toán phải là MOMO' })
+  @IsEnum(PaymentProvider, { message: 'Cổng thanh toán phải là MOMO hoặc SEPAY' })
   paymentProvider?: PaymentProvider;
 
   @ApiProperty({ description: 'Danh sách món ăn đặt trước', type: [PickupOrderItemDto] })
