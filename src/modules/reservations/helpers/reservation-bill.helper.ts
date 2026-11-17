@@ -225,7 +225,6 @@ export function computeReservationBillBreakdown(reservation: BillReservationSour
 
 export function formatPaymentProviderLabel(provider: string): string {
   if (provider === PaymentProvider.MOMO) return 'Ví MoMo';
-  if (provider === PaymentProvider.VNPAY) return 'Cổng VNPay';
   return 'Tiền mặt tại quầy';
 }
 

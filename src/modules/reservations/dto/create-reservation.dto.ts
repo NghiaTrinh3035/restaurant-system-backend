@@ -101,11 +101,11 @@ export class CreateReservationDto {
   preOrders?: PreOrderItemDto[];
 
   @ApiPropertyOptional({
-    description: 'Cổng thanh toán tiền cọc trực tuyến (MOMO hoặc VNPAY)',
+    description: 'Cổng thanh toán tiền cọc trực tuyến (MOMO)',
     enum: PaymentProvider,
     example: PaymentProvider.MOMO,
   })
   @IsOptional()
-  @IsEnum(PaymentProvider, { message: 'Cổng thanh toán phải là MOMO hoặc VNPAY' })
+  @IsEnum(PaymentProvider, { message: 'Cổng thanh toán phải là MOMO' })
   paymentProvider?: PaymentProvider;
 }

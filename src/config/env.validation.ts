@@ -116,15 +116,6 @@ export class EnvironmentVariables {
 
   @IsString({ message: 'MOMO_ENDPOINT bắt buộc và không được để trống' })
   MOMO_ENDPOINT: string;
-
-  @IsString({ message: 'VNP_TMN_CODE bắt buộc và không được để trống' })
-  VNP_TMN_CODE: string;
-
-  @IsString({ message: 'VNP_HASH_SECRET bắt buộc và không được để trống' })
-  VNP_HASH_SECRET: string;
-
-  @IsString({ message: 'VNP_URL bắt buộc và không được để trống' })
-  VNP_URL: string;
 }
 
 export function validate(config: Record<string, unknown>) {

@@ -9,7 +9,7 @@ import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CheckoutInvoiceDto {
-  @ApiProperty({ description: 'Phương thức thanh toán', example: 'CASH', enum: ['CASH', 'BANKING', 'VNPAY', 'MOMO', 'CARD'] })
+  @ApiProperty({ description: 'Phương thức thanh toán', example: 'CASH', enum: ['CASH', 'BANKING', 'MOMO', 'CARD'] })
   @IsString({ message: 'paymentMethod phải là chuỗi ký tự' })
   @IsNotEmpty({ message: 'paymentMethod không được để trống' })
   paymentMethod: string;

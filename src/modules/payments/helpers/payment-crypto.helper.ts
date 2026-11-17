@@ -6,13 +6,6 @@ export function hmacSha256Hex(secret: string, data: string): string {
   return crypto.createHmac('sha256', secret).update(data, 'utf8').digest('hex');
 }
 
-export function hmacSha512Hex(secret: string, data: string): string {
-  return crypto
-    .createHmac('sha512', secret)
-    .update(Buffer.from(data, 'utf-8'))
-    .digest('hex');
-}
-
 export function timingSafeEqualHex(expectedHex: string, receivedHex: string): boolean {
   if (!expectedHex || !receivedHex) {
     return false;
@@ -54,7 +47,7 @@ export function formatVietnamDateTime(date: Date): string {
   );
 }
 
-/** Chuẩn hóa IP client về IPv4 hợp lệ (VNPay từ chối IPv6 ::1) */
+/** Chuẩn hóa IP client về IPv4 hợp lệ */
 export function normalizeClientIp(rawIp: string | undefined): string {
   if (!rawIp) {
     return '127.0.0.1';

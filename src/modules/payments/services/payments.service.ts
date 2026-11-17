@@ -37,7 +37,6 @@ import { CreatePaymentDto } from '../dto/create-payment.dto';
 import { QueryPaymentDto } from '../dto/query-payment.dto';
 import { generateTransactionCode, normalizeClientIp } from '../helpers/payment-crypto.helper';
 import { MomoCallbackRawPayload, MomoGatewayService } from './momo-gateway.service';
-import { VnpayGatewayService } from './vnpay-gateway.service';
 
 const PAYMENT_EXPIRY_MINUTES = 15;
 const PAYMENT_LOCK_TTL_MS = 15000;
@@ -70,7 +69,6 @@ export class PaymentsService {
     private readonly prisma: PrismaService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly momoGateway: MomoGatewayService,
-    private readonly vnpayGateway: VnpayGatewayService,
     private readonly tablesGateway: TablesGateway,
     private readonly mailService: MailService,
   ) {}
@@ -122,13 +120,7 @@ export class PaymentsService {
           orderInfo: target.orderInfo,
         });
       } else {
-        payUrl = this.vnpayGateway.createPaymentUrl({
-          transactionCode: transaction.transactionCode,
-          amount: target.amount,
-          orderInfo: target.orderInfo,
-          clientIp,
-          expiresAt,
-        });
+        throw new BadRequestException('Phương thức thanh toán trực tuyến không được hỗ trợ.');
       }
     } catch (error) {
       await this.prisma.paymentTransaction.update({
@@ -187,39 +179,11 @@ export class PaymentsService {
     return { accepted: true };
   }
 
-  async handleVnpayIpn(rawQuery: Record<string, unknown>): Promise<{ RspCode: string; Message: string }> {
-    const verified = this.vnpayGateway.verifyCallback(rawQuery);
-    if (!verified.isValidSignature) {
-      this.logger.warn(`Từ chối VNPay IPN do chữ ký không hợp lệ: vnp_TxnRef=${verified.transactionCode}`);
-      return { RspCode: '97', Message: 'Invalid signature' };
-    }
-
-    const outcome = await this.processGatewayVerification({
-      transactionCode: verified.transactionCode,
-      amount: verified.amount,
-      isSuccess: verified.isSuccess,
-      gatewayTransId: verified.gatewayTransId,
-      responseCode: verified.responseCode,
-      rawPayload: rawQuery,
-    });
-
-    switch (outcome) {
-      case 'NOT_FOUND':
-        return { RspCode: '01', Message: 'Order not found' };
-      case 'AMOUNT_MISMATCH':
-        return { RspCode: '04', Message: 'Invalid amount' };
-      case 'ALREADY_CONFIRMED':
-        return { RspCode: '02', Message: 'Order already confirmed' };
-      case 'OK':
-        return { RspCode: '00', Message: 'Confirm Success' };
-    }
-  }
-
   async verifyReturn(provider: PaymentProvider, rawQuery: Record<string, unknown>) {
-    const verified =
-      provider === PaymentProvider.MOMO
-        ? this.momoGateway.verifyCallback(rawQuery)
-        : this.vnpayGateway.verifyCallback(rawQuery);
+    if (provider !== PaymentProvider.MOMO) {
+      throw new BadRequestException('Cổng thanh toán không được hỗ trợ.');
+    }
+    const verified = this.momoGateway.verifyCallback(rawQuery);
 
     if (!verified.isValidSignature) {
       throw new BadRequestException('Chữ ký xác thực từ cổng thanh toán không hợp lệ.');

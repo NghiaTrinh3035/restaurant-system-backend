@@ -30,7 +30,7 @@ export class PaymentsController {
   @Post('create')
   @Public()
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Khởi tạo link thanh toán trực tuyến (MoMo / VNPay)' })
+  @ApiOperation({ summary: 'Khởi tạo link thanh toán trực tuyến (MoMo)' })
   @ResponseMessage('Khởi tạo giao dịch thanh toán thành công.')
   async createPayment(
     @Body() dto: CreatePaymentDto,
@@ -59,14 +59,6 @@ export class PaymentsController {
     return res.status(HttpStatus.NO_CONTENT).send();
   }
 
-  @Get('vnpay/ipn')
-  @Public()
-  @ApiOperation({ summary: 'Webhook IPN nhận kết quả thanh toán từ VNPay' })
-  async handleVnpayIpn(@Query() query: Record<string, unknown>, @Res() res: Response) {
-    const result = await this.paymentsService.handleVnpayIpn(query);
-    return res.status(HttpStatus.OK).json(result);
-  }
-
   @Get('momo/verify')
   @Public()
   @HttpCode(HttpStatus.OK)
@@ -74,15 +66,6 @@ export class PaymentsController {
   @ResponseMessage('Xác thực kết quả thanh toán MoMo thành công.')
   async verifyMomoReturn(@Query() query: Record<string, unknown>) {
     return this.paymentsService.verifyReturn(PaymentProvider.MOMO, query);
-  }
-
-  @Get('vnpay/verify')
-  @Public()
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Xác thực chữ ký Return URL khi khách quay về từ VNPay' })
-  @ResponseMessage('Xác thực kết quả thanh toán VNPay thành công.')
-  async verifyVnpayReturn(@Query() query: Record<string, unknown>) {
-    return this.paymentsService.verifyReturn(PaymentProvider.VNPAY, query);
   }
 
   @Get()

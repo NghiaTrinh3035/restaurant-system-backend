@@ -8,9 +8,4 @@ export const paymentConfig = registerAs('payment', () => ({
     secretKey: process.env.MOMO_SECRET_KEY as string,
     endpoint: process.env.MOMO_ENDPOINT as string,
   },
-  vnpay: {
-    tmnCode: process.env.VNP_TMN_CODE as string,
-    hashSecret: process.env.VNP_HASH_SECRET as string,
-    url: process.env.VNP_URL as string,
-  },
 }));

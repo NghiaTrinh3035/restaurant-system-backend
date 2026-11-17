@@ -788,8 +788,8 @@ export class ReservationsService {
 
     const bill = await this.getReservationBill(reservation.id, user);
 
-    // Trường hợp thanh toán trực tuyến qua MoMo hoặc VNPay
-    if (dto.paymentMethod === PaymentProvider.MOMO || dto.paymentMethod === PaymentProvider.VNPAY) {
+    // Trường hợp thanh toán trực tuyến qua MoMo
+    if (dto.paymentMethod === PaymentProvider.MOMO) {
       if (bill.remainingAmount <= 0) {
         throw new BadRequestException('Hóa đơn không có số dư cần thanh toán trực tuyến.');
       }
