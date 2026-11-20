@@ -6,9 +6,9 @@ export class CreatePaymentDto {
   @ApiProperty({
     description: 'Cổng thanh toán sử dụng',
     enum: PaymentProvider,
-    example: PaymentProvider.VNPAY,
+    example: PaymentProvider.MOMO,
   })
-  @IsEnum(PaymentProvider, { message: 'Phương thức thanh toán phải là MOMO hoặc VNPAY.' })
+  @IsEnum(PaymentProvider, { message: 'Phương thức thanh toán phải là MOMO hoặc SEPAY.' })
   @IsNotEmpty({ message: 'Vui lòng chọn phương thức thanh toán.' })
   provider: PaymentProvider;
 

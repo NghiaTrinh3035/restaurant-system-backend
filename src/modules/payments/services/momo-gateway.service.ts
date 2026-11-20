@@ -56,7 +56,7 @@ export class MomoGatewayService {
 
     const redirectUrl = `${appPublicUrl.replace(/\/+$/, '')}/payment/result?provider=MOMO`;
     const ipnUrl = `${callbackBaseUrl.replace(/\/+$/, '')}/api/payments/momo/ipn`;
-    const requestType = 'captureWallet';
+    const requestType = 'payWithMethod';
     const extraData = '';
     const amount = Math.round(input.amount);
     const requestId = input.transactionCode;

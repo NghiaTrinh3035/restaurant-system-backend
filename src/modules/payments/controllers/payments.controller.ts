@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -20,6 +21,7 @@ import type { ICurrentUser } from 'src/core/common/interfaces/current-user.inter
 import { CreatePaymentDto } from '../dto/create-payment.dto';
 import { QueryPaymentDto } from '../dto/query-payment.dto';
 import type { MomoCallbackRawPayload } from '../services/momo-gateway.service';
+import type { SepayIpnPayload } from '../services/sepay-gateway.service';
 import { PaymentsService } from '../services/payments.service';
 
 @ApiTags('Payments')
@@ -30,7 +32,7 @@ export class PaymentsController {
   @Post('create')
   @Public()
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Khởi tạo link thanh toán trực tuyến (MoMo / VNPay)' })
+  @ApiOperation({ summary: 'Khởi tạo link thanh toán trực tuyến (MoMo)' })
   @ResponseMessage('Khởi tạo giao dịch thanh toán thành công.')
   async createPayment(
     @Body() dto: CreatePaymentDto,
@@ -59,12 +61,22 @@ export class PaymentsController {
     return res.status(HttpStatus.NO_CONTENT).send();
   }
 
-  @Get('vnpay/ipn')
+  @Post('sepay/ipn')
   @Public()
-  @ApiOperation({ summary: 'Webhook IPN nhận kết quả thanh toán từ VNPay' })
-  async handleVnpayIpn(@Query() query: Record<string, unknown>, @Res() res: Response) {
-    const result = await this.paymentsService.handleVnpayIpn(query);
-    return res.status(HttpStatus.OK).json(result);
+  @ApiOperation({ summary: 'Webhook IPN nhận kết quả thanh toán từ SePay' })
+  async handleSepayIpn(
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Body() payload: SepayIpnPayload,
+    @Res() res: Response,
+  ) {
+    const result = await this.paymentsService.handleSepayIpn(headers, payload);
+    if (!result.accepted) {
+      if (result.reason === 'INVALID_SECRET_KEY') {
+        return res.status(HttpStatus.UNAUTHORIZED).json({ error: 'Unauthorized' });
+      }
+      return res.status(HttpStatus.BAD_REQUEST).json({ success: false, reason: result.reason });
+    }
+    return res.status(HttpStatus.OK).json({ success: true });
   }
 
   @Get('momo/verify')
@@ -76,13 +88,13 @@ export class PaymentsController {
     return this.paymentsService.verifyReturn(PaymentProvider.MOMO, query);
   }
 
-  @Get('vnpay/verify')
+  @Get('sepay/verify')
   @Public()
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Xác thực chữ ký Return URL khi khách quay về từ VNPay' })
-  @ResponseMessage('Xác thực kết quả thanh toán VNPay thành công.')
-  async verifyVnpayReturn(@Query() query: Record<string, unknown>) {
-    return this.paymentsService.verifyReturn(PaymentProvider.VNPAY, query);
+  @ApiOperation({ summary: 'Xác thực Return URL khi khách quay về từ SePay' })
+  @ResponseMessage('Xác thực kết quả thanh toán SePay thành công.')
+  async verifySepayReturn(@Query() query: Record<string, unknown>) {
+    return this.paymentsService.verifyReturn(PaymentProvider.SEPAY, query);
   }
 
   @Get()
@@ -95,6 +107,18 @@ export class PaymentsController {
     @CurrentUser() user?: ICurrentUser,
   ) {
     return this.paymentsService.getPaymentsByTarget(query, user);
+  }
+
+  @Post(':transactionCode/cancel')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Hủy giao dịch thanh toán đang chờ (khi khách hủy hoặc cổng báo lỗi)' })
+  @ResponseMessage('Đã cập nhật trạng thái hủy giao dịch thanh toán.')
+  async cancelPendingPayment(
+    @Param('transactionCode') transactionCode: string,
+    @CurrentUser() user?: ICurrentUser,
+  ) {
+    return this.paymentsService.cancelPendingPayment(transactionCode, user);
   }
 
   @Get(':transactionCode')

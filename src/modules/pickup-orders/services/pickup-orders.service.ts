@@ -165,7 +165,7 @@ export class PickupOrdersService {
     const orderCode = generatePickupCode(dto.pickupDate);
     const phone = dto.customerPhone.trim();
 
-    const createdOrder = await this.prisma.$transaction(async (tx) => {
+    const createdOrderId = await this.prisma.$transaction(async (tx) => {
       const order = await tx.pickupOrder.create({
         data: {
           orderCode,
@@ -179,23 +179,20 @@ export class PickupOrdersService {
           totalAmount,
           specialNotes: dto.specialNotes?.trim() || null,
           status: PickupOrderStatus.PENDING,
+          items: { create: orderLines },
         },
+        select: { id: true },
       });
 
-      await tx.pickupOrderItem.createMany({
-        data: orderLines.map((line) => ({
-          ...line,
-          orderId: order.id,
-        })),
-      });
+      return order.id;
+    });
 
-      return tx.pickupOrder.findUnique({
-        where: { id: order.id },
-        include: {
-          branch: { select: { id: true, name: true, phone: true, streetAddress: true, address: true } },
-          items: { include: { menuItem: true } },
-        },
-      });
+    const createdOrder = await this.prisma.pickupOrder.findUnique({
+      where: { id: createdOrderId },
+      include: {
+        branch: { select: { id: true, name: true, phone: true, streetAddress: true, address: true } },
+        items: { include: { menuItem: true } },
+      },
     });
 
     // 1. Gửi email hóa đơn & xác nhận đơn mang về cho khách (bất đồng bộ)

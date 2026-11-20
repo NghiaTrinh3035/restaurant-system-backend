@@ -16,6 +16,7 @@ import { ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { ReservationsService } from '../services/reservations.service';
 import { ReservationAvailabilityService } from '../services/reservation-availability.service';
+import { ReservationBillingService } from '../services/reservation-billing.service';
 import { CreateReservationDto } from '../dto/create-reservation.dto';
 import { QueryAvailableSlotsDto } from '../dto/query-available-slots.dto';
 import { QueryReservationDto } from '../dto/query-reservation.dto';
@@ -38,6 +39,7 @@ export class ReservationsController {
   constructor(
     private readonly reservationsService: ReservationsService,
     private readonly availabilityService: ReservationAvailabilityService,
+    private readonly billingService: ReservationBillingService,
   ) {}
 
   @Post()
@@ -169,7 +171,7 @@ export class ReservationsController {
     @Param('id') id: string,
     @CurrentUser() user: ICurrentUser,
   ) {
-    return this.reservationsService.getReservationBill(id, user);
+    return this.billingService.getReservationBill(id, user);
   }
 
   @Post(':id/settle')
@@ -191,6 +193,6 @@ export class ReservationsController {
           ? forwardedFor[0]
           : req.ip;
 
-    return this.reservationsService.settleReservationBill(id, dto, user, rawIp);
+    return this.billingService.settleReservationBill(id, dto, user, rawIp);
   }
 }

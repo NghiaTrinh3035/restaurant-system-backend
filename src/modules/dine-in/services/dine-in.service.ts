@@ -552,8 +552,8 @@ export class DineInService {
             const normalizedProvider =
               dto.paymentMethod === 'MOMO'
                 ? PaymentProvider.MOMO
-                : dto.paymentMethod === 'VNPAY'
-                  ? PaymentProvider.VNPAY
+                : dto.paymentMethod === 'SEPAY'
+                  ? PaymentProvider.SEPAY
                   : PaymentProvider.CASH;
             const transactionCode = generateTransactionCode(normalizedProvider);
 

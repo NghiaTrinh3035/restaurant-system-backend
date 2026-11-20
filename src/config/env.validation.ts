@@ -117,14 +117,21 @@ export class EnvironmentVariables {
   @IsString({ message: 'MOMO_ENDPOINT bắt buộc và không được để trống' })
   MOMO_ENDPOINT: string;
 
-  @IsString({ message: 'VNP_TMN_CODE bắt buộc và không được để trống' })
-  VNP_TMN_CODE: string;
+  @IsString({ message: 'SEPAY_MERCHANT_ID bắt buộc và không được để trống' })
+  SEPAY_MERCHANT_ID: string;
 
-  @IsString({ message: 'VNP_HASH_SECRET bắt buộc và không được để trống' })
-  VNP_HASH_SECRET: string;
+  @IsString({ message: 'SEPAY_SECRET_KEY bắt buộc và không được để trống' })
+  SEPAY_SECRET_KEY: string;
 
-  @IsString({ message: 'VNP_URL bắt buộc và không được để trống' })
-  VNP_URL: string;
+  @IsString({ message: 'SEPAY_CHECKOUT_URL bắt buộc và không được để trống' })
+  SEPAY_CHECKOUT_URL: string;
+
+  @IsString({ message: 'SEPAY_API_URL bắt buộc và không được để trống' })
+  SEPAY_API_URL: string;
+
+  @IsString()
+  @IsOptional()
+  CMD_NGROK?: string;
 }
 
 export function validate(config: Record<string, unknown>) {

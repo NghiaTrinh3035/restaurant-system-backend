@@ -6,11 +6,8 @@ export function hmacSha256Hex(secret: string, data: string): string {
   return crypto.createHmac('sha256', secret).update(data, 'utf8').digest('hex');
 }
 
-export function hmacSha512Hex(secret: string, data: string): string {
-  return crypto
-    .createHmac('sha512', secret)
-    .update(Buffer.from(data, 'utf-8'))
-    .digest('hex');
+export function hmacSha256Base64(secret: string, data: string): string {
+  return crypto.createHmac('sha256', secret).update(data, 'utf8').digest('base64');
 }
 
 export function timingSafeEqualHex(expectedHex: string, receivedHex: string): boolean {
@@ -21,6 +18,18 @@ export function timingSafeEqualHex(expectedHex: string, receivedHex: string): bo
   const normalizedReceived = receivedHex.trim().toLowerCase();
   const expectedBuf = Buffer.from(normalizedExpected, 'utf8');
   const receivedBuf = Buffer.from(normalizedReceived, 'utf8');
+  if (expectedBuf.length !== receivedBuf.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(expectedBuf, receivedBuf);
+}
+
+export function timingSafeEqualString(expected: string, received: string): boolean {
+  if (!expected || !received) {
+    return false;
+  }
+  const expectedBuf = Buffer.from(expected.trim(), 'utf8');
+  const receivedBuf = Buffer.from(received.trim(), 'utf8');
   if (expectedBuf.length !== receivedBuf.length) {
     return false;
   }
@@ -54,7 +63,7 @@ export function formatVietnamDateTime(date: Date): string {
   );
 }
 
-/** Chuẩn hóa IP client về IPv4 hợp lệ (VNPay từ chối IPv6 ::1) */
+/** Chuẩn hóa IP client về IPv4 hợp lệ */
 export function normalizeClientIp(rawIp: string | undefined): string {
   if (!rawIp) {
     return '127.0.0.1';
@@ -74,4 +83,18 @@ export function generateTransactionCode(prefix: string): string {
   const timestamp = formatVietnamDateTime(new Date());
   const randomSuffix = crypto.randomBytes(3).toString('hex').toUpperCase();
   return `${prefix}${timestamp}${randomSuffix}`;
+}
+
+export function sanitizePayloadForStorage(
+  rawPayload: Record<string, unknown>,
+): Record<string, string | number | boolean | null> {
+  const cleaned: Record<string, string | number | boolean | null> = {};
+  for (const [key, value] of Object.entries(rawPayload)) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || value === null) {
+      cleaned[key] = value;
+    } else if (value !== undefined) {
+      cleaned[key] = JSON.stringify(value);
+    }
+  }
+  return cleaned;
 }

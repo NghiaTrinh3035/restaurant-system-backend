@@ -1,15 +1,16 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { GatewayModule } from 'src/gateway/gateway.module';
 import { MailModule } from 'src/mail/mail.module';
+import { TablesModule } from 'src/modules/tables/tables.module';
 import { PaymentsController } from './controllers/payments.controller';
 import { MomoGatewayService } from './services/momo-gateway.service';
 import { PaymentsService } from './services/payments.service';
-import { VnpayGatewayService } from './services/vnpay-gateway.service';
+import { SepayGatewayService } from './services/sepay-gateway.service';
 
 @Module({
-  imports: [GatewayModule, MailModule],
+  imports: [GatewayModule, MailModule, forwardRef(() => TablesModule)],
   controllers: [PaymentsController],
-  providers: [PaymentsService, MomoGatewayService, VnpayGatewayService],
+  providers: [PaymentsService, MomoGatewayService, SepayGatewayService],
   exports: [PaymentsService],
 })
 export class PaymentsModule {}

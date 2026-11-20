@@ -8,6 +8,8 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { QueryAvailableSlotsDto } from '../dto/query-available-slots.dto';
 import {
   ACTIVE_RESERVATION_STATUSES,
+  MAX_RESERVATION_TABLES,
+  getReservationTableIds,
   MAX_ADVANCE_DAYS,
   MIN_LEAD_TIME_MINUTES,
   SLOT_STEP_MINUTES,
@@ -43,6 +45,7 @@ export interface ServiceWindow {
 export interface ActiveReservationSlot {
   id: string;
   tableId: string | null;
+  reservationTables?: Array<{ tableId: string }>;
   userId: string | null;
   customerPhone: string;
   guestCount: number;
@@ -138,6 +141,7 @@ export class ReservationAvailabilityService {
       select: {
         id: true,
         tableId: true,
+        reservationTables: { select: { tableId: true } },
         userId: true,
         customerPhone: true,
         guestCount: true,
@@ -162,6 +166,48 @@ export class ReservationAvailabilityService {
    * - Bàn đã gán cho đơn trùng giờ bị loại.
    * - Mỗi đơn trùng giờ chưa gán bàn (nhà hàng tự xếp) chiếm 1 bàn có thể dùng cho nhóm này.
    */
+  private consumeTablesForGroup(
+    pool: BranchTable[],
+    neededGuests: number,
+    allowSingleOversized: boolean,
+  ): boolean {
+    if (pool.length === 0) return false;
+
+    if (allowSingleOversized) {
+      let bestIdx = -1;
+      for (let i = 0; i < pool.length; i++) {
+        if (
+          pool[i].tableType.capacity >= neededGuests &&
+          (bestIdx === -1 || pool[i].tableType.capacity < pool[bestIdx].tableType.capacity)
+        ) {
+          bestIdx = i;
+        }
+      }
+      if (bestIdx !== -1) {
+        pool.splice(bestIdx, 1);
+        return true;
+      }
+    }
+
+    const descending = [...pool].sort((a, b) => b.tableType.capacity - a.tableType.capacity);
+    const chosenIds = new Set<string>();
+    let covered = 0;
+    for (const t of descending) {
+      if (chosenIds.size >= MAX_RESERVATION_TABLES) break;
+      chosenIds.add(t.id);
+      covered += t.tableType.capacity;
+      if (covered >= neededGuests) break;
+    }
+    if (covered < neededGuests) return false;
+
+    for (let i = pool.length - 1; i >= 0; i--) {
+      if (chosenIds.has(pool[i].id)) {
+        pool.splice(i, 1);
+      }
+    }
+    return true;
+  }
+
   countRemainingTables(
     tables: BranchTable[],
     reservations: ActiveReservationSlot[],
@@ -172,15 +218,44 @@ export class ReservationAvailabilityService {
     const capacities = tables.map((t) => t.tableType.capacity);
     const limit = getSuitableCapacityLimit(guestCount, capacities);
     const overlapping = this.filterOverlapping(reservations, startMins, duration);
-    const reservedTableIds = new Set(overlapping.filter((r) => r.tableId).map((r) => r.tableId));
+    const reservedTableIds = new Set<string>();
+    for (const r of overlapping) {
+      for (const id of getReservationTableIds(r)) {
+        reservedTableIds.add(id);
+      }
+    }
 
-    const freeSuitable = tables.filter((t) => {
+    const pool = tables.filter((t) => !reservedTableIds.has(t.id));
+    const unassigned = overlapping
+      .filter((r) => getReservationTableIds(r).length === 0)
+      .sort((a, b) => b.guestCount - a.guestCount);
+
+    for (const u of unassigned) {
+      if (!this.consumeTablesForGroup(pool, u.guestCount, true)) {
+        return 0;
+      }
+    }
+
+    const freeSuitable = pool.filter((t) => {
       const capacity = t.tableType.capacity;
-      return capacity >= guestCount && capacity <= limit && !reservedTableIds.has(t.id);
+      return capacity >= guestCount && capacity <= limit;
     });
-    const unassignedCompeting = overlapping.filter((r) => !r.tableId && r.guestCount <= limit).length;
 
-    return Math.max(0, freeSuitable.length - unassignedCompeting);
+    if (freeSuitable.length > 0) {
+      return freeSuitable.length;
+    }
+
+    const hasSingleCapableTable = capacities.some((c) => c >= guestCount);
+    const combinePool = hasSingleCapableTable
+      ? pool.filter((t) => t.tableType.capacity < guestCount)
+      : [...pool];
+
+    let combinableGroups = 0;
+    while (this.consumeTablesForGroup(combinePool, guestCount, !hasSingleCapableTable)) {
+      combinableGroups++;
+    }
+
+    return combinableGroups;
   }
 
   async getAvailableSlots(query: QueryAvailableSlotsDto) {
@@ -210,11 +285,17 @@ export class ReservationAvailabilityService {
         message: `Chỉ nhận đặt bàn từ hôm nay đến ${MAX_ADVANCE_DAYS} ngày tới.`,
       };
     }
-    if (!branch.tables.some((t) => t.tableType.capacity >= guestCount)) {
+    const maxCombinableCapacity = branch.tables
+      .map((t) => t.tableType.capacity)
+      .sort((a, b) => b - a)
+      .slice(0, MAX_RESERVATION_TABLES)
+      .reduce((sum, cap) => sum + cap, 0);
+
+    if (maxCombinableCapacity < guestCount) {
       return {
         ...baseResponse,
         slots: [],
-        message: `Chi nhánh không có bàn đủ chỗ cho ${guestCount} khách. Vui lòng liên hệ hotline ${branch.phone} để đặt tiệc.`,
+        message: `Chi nhánh không có đủ bàn phù hợp cho ${guestCount} khách (tối đa ${MAX_RESERVATION_TABLES} bàn ghép). Vui lòng liên hệ hotline ${branch.phone} để đặt tiệc.`,
       };
     }
 

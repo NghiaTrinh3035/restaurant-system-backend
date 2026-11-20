@@ -288,9 +288,11 @@ export class TablesGateway
 
     const room = `branch:${dto.branchId}`;
 
-    // Bàn cũ của người dùng (nếu có) đã được nhả để giữ bàn mới
-    if (result.releasedLock) {
-      this.server.to(room).emit('table:released', result.releasedLock);
+    // Các bàn ở khung giờ cũ của người dùng (nếu đổi khung giờ/chi nhánh) đã được nhả
+    if (result.releasedLocks && result.releasedLocks.length > 0) {
+      for (const releasedLock of result.releasedLocks) {
+        this.server.to(room).emit('table:released', releasedLock);
+      }
     }
 
     if (!result.success) {
@@ -369,6 +371,35 @@ export class TablesGateway
     this.server.to(room).emit('table:reserved', payload);
   }
 
+  /**
+   * Phát sự kiện nhiều bàn đã được đặt thành công (đơn ghép nhiều bàn)
+   */
+  notifyTablesReserved(payload: { branchId: string; tableIds: string[]; date: string; time: string }) {
+    for (const tableId of payload.tableIds) {
+      this.notifyTableReserved({
+        branchId: payload.branchId,
+        tableId,
+        date: payload.date,
+        time: payload.time,
+      });
+    }
+  }
+
+  /**
+   * Phát sự kiện nhiều bàn được giải phóng khóa (thanh toán bị hủy, lỗi hoặc hết hạn)
+   */
+  notifyTablesReleased(payload: { branchId: string; tableIds: string[]; date: string; time: string }) {
+    const room = `branch:${payload.branchId}`;
+    for (const tableId of payload.tableIds) {
+      this.server.to(room).emit('table:released', {
+        branchId: payload.branchId,
+        tableId,
+        date: payload.date,
+        time: payload.time,
+      });
+    }
+  }
+
   // WebSocket không đi qua ValidationPipe toàn cục nên validate thủ công
   private async validateLockDto(dto: TableLockDto): Promise<string | null> {
     const errors = await validate(plainToInstance(TableLockDto, dto ?? {}));
@@ -387,9 +418,13 @@ export class TablesGateway
   /**
    * Phát sự kiện có đơn đặt bàn mới tạo
    */
-  private emitReservationEvent(event: string, branchId: string, reservation: any) {
+  private emitReservationEvent<T extends { userId?: string | null }>(
+    event: string,
+    branchId: string,
+    reservation: T,
+  ) {
     let target = this.server.to(`branch:${branchId}`);
-    if (reservation?.userId) {
+    if (reservation.userId) {
       target = target.to(`user:${reservation.userId}`);
     }
     target.emit(event, reservation);
@@ -398,14 +433,14 @@ export class TablesGateway
   /**
    * Phát sự kiện có đơn đặt bàn mới tới màn hình quản lý chi nhánh và tài khoản đặt
    */
-  notifyReservationCreated(branchId: string, reservation: any) {
+  notifyReservationCreated<T extends { userId?: string | null }>(branchId: string, reservation: T) {
     this.emitReservationEvent('reservation:created', branchId, reservation);
   }
 
   /**
    * Phát sự kiện đơn đặt bàn được cập nhật trạng thái tới chi nhánh và khách hàng sở hữu
    */
-  notifyReservationUpdated(branchId: string, reservation: any) {
+  notifyReservationUpdated<T extends { userId?: string | null }>(branchId: string, reservation: T) {
     this.emitReservationEvent('reservation:updated', branchId, reservation);
   }
 
@@ -470,7 +505,8 @@ export class TablesGateway
    */
   @SubscribeMessage('admin:join')
   async handleJoinAdmin(@ConnectedSocket() client: Socket) {
-    if (client.data?.user?.role !== Role.ADMIN) {
+    const user = (client.data as TypedSocketData | undefined)?.user;
+    if (user?.role !== Role.ADMIN) {
       return;
     }
     await client.join('admin:all');

@@ -5,10 +5,10 @@ import { PaymentProvider } from '@prisma/client';
 export class SettleBillDto {
   @ApiProperty({
     enum: PaymentProvider,
-    description: 'Phương thức thanh toán quyết toán (CASH | MOMO | VNPAY)',
+    description: 'Phương thức thanh toán quyết toán (CASH | MOMO | SEPAY)',
     example: PaymentProvider.CASH,
   })
-  @IsEnum(PaymentProvider, { message: 'Phương thức thanh toán phải là CASH, MOMO hoặc VNPAY.' })
+  @IsEnum(PaymentProvider, { message: 'Phương thức thanh toán phải là CASH, MOMO hoặc SEPAY.' })
   paymentMethod: PaymentProvider;
 
   @ApiPropertyOptional({
