@@ -50,6 +50,15 @@ export interface VerifiedSepayIpn {
   message: string;
 }
 
+export interface SepayOrderDetailResult {
+  found: boolean;
+  orderStatus: string;
+  amount: number;
+  gatewayTransId: string;
+  transactionStatus: string;
+  rawPayload: Record<string, unknown>;
+}
+
 @Injectable()
 export class SepayGatewayService {
   private readonly logger = new Logger(SepayGatewayService.name);
@@ -63,9 +72,10 @@ export class SepayGatewayService {
     const appPublicUrl = this.configService.getOrThrow<string>('app.appPublicUrl');
 
     const amount = Math.round(input.amount);
-    const successUrl = `${appPublicUrl.replace(/\/+$/, '')}/payment/result?provider=SEPAY&order_invoice_number=${input.transactionCode}`;
-    const errorUrl = `${appPublicUrl.replace(/\/+$/, '')}/payment/result?provider=SEPAY&order_invoice_number=${input.transactionCode}`;
-    const cancelUrl = `${appPublicUrl.replace(/\/+$/, '')}/payment/result?provider=SEPAY&order_invoice_number=${input.transactionCode}`;
+    const baseResultUrl = `${appPublicUrl.replace(/\/+$/, '')}/payment/result?provider=SEPAY&order_invoice_number=${input.transactionCode}`;
+    const successUrl = `${baseResultUrl}&sepayStatus=success`;
+    const errorUrl = `${baseResultUrl}&sepayStatus=error`;
+    const cancelUrl = `${baseResultUrl}&sepayStatus=cancel`;
 
     const fields: Record<string, string> = {
       order_amount: String(amount),
@@ -98,20 +108,17 @@ export class SepayGatewayService {
     ];
 
     const signedParts: string[] = [];
+    const bodyParams = new URLSearchParams();
     for (const field of allowedFields) {
       const val = fields[field];
       if (val !== undefined && val !== '' && val !== '0' && val !== '0.00') {
         signedParts.push(`${field}=${val}`);
+        bodyParams.append(field, val);
       }
     }
 
     const signString = signedParts.join(',');
     const signature = hmacSha256Base64(secretKey, signString);
-
-    const bodyParams = new URLSearchParams();
-    for (const [key, value] of Object.entries(fields)) {
-      bodyParams.append(key, value);
-    }
     bodyParams.append('signature', signature);
 
     const response = await fetch(checkoutUrl, {
@@ -186,5 +193,64 @@ export class SepayGatewayService {
       responseCode: orderStatus || notificationType,
       message: isSuccess ? 'Thanh toán SePay thành công' : 'Thanh toán SePay không thành công hoặc không hợp lệ',
     };
+  }
+
+  /** Chủ động truy vấn trạng thái đơn hàng từ SePay API khi IPN chưa kịp gọi về */
+  async fetchOrderStatus(transactionCode: string): Promise<SepayOrderDetailResult | null> {
+    const merchantId = this.configService.getOrThrow<string>('payment.sepay.merchantId');
+    const secretKey = this.configService.getOrThrow<string>('payment.sepay.secretKey');
+    const apiUrl = this.configService.getOrThrow<string>('payment.sepay.apiUrl').replace(/\/+$/, '');
+    const basicAuth = Buffer.from(`${merchantId}:${secretKey}`).toString('base64');
+
+    try {
+      const response = await fetch(`${apiUrl}/v1/order/detail/${encodeURIComponent(transactionCode)}`, {
+        headers: {
+          Authorization: `Basic ${basicAuth}`,
+          Accept: 'application/json',
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!response.ok) {
+        if (response.status !== 404) {
+          this.logger.warn(`Truy vấn trạng thái SePay thất bại [${response.status}] cho ${transactionCode}`);
+        }
+        return null;
+      }
+
+      const rawJson = (await response.json()) as Record<string, unknown>;
+      const data = rawJson.data as
+        | {
+            order_id?: string;
+            order_status?: string;
+            order_amount?: string | number;
+            transactions?: Array<{
+              id?: string;
+              transaction_status?: string;
+              transaction_amount?: string | number;
+            }>;
+          }
+        | undefined;
+      if (!data) {
+        return null;
+      }
+
+      const approvedOrFirstTx =
+        data.transactions?.find((t) => t.transaction_status === 'APPROVED') ?? data.transactions?.[0];
+
+      return {
+        found: true,
+        orderStatus: data.order_status ?? '',
+        amount: Number(data.order_amount ?? approvedOrFirstTx?.transaction_amount ?? 0),
+        gatewayTransId: approvedOrFirstTx?.id ?? data.order_id ?? '',
+        transactionStatus: approvedOrFirstTx?.transaction_status ?? '',
+        rawPayload: rawJson,
+      };
+    } catch (err) {
+      this.logger.warn(
+        `Lỗi kết nối truy vấn đơn SePay ${transactionCode}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
   }
 }

@@ -1,15 +1,13 @@
 import {
   BadRequestException,
   ConflictException,
-  ForbiddenException,
   Inject,
   Injectable,
   Logger,
   NotFoundException,
-  UnauthorizedException,
+  forwardRef,
 } from '@nestjs/common';
 import {
-  InvoiceStatus,
   PaymentProvider,
   PaymentPurpose,
   PaymentStatus,
@@ -17,7 +15,6 @@ import {
   Prisma,
   ReservationStatus,
   RestaurantTableStatus,
-  Role,
 } from '@prisma/client';
 import * as crypto from 'crypto';
 import type Redis from 'ioredis';
@@ -28,14 +25,22 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { REDIS_CLIENT } from 'src/redis/redis.module';
 import {
   RESERVATION_BILL_INCLUDE,
-  RESERVATION_INVOICES_BILL_INCLUDE,
+  RESERVATION_LIST_INCLUDE,
+  buildReservationConfirmedMailPayload,
   buildReservationInvoiceMailPayload,
-  computeBatchesFoodTotal,
+  closeReservationInvoicesInTx,
   computeReservationBillBreakdown,
 } from 'src/modules/reservations/helpers/reservation-bill.helper';
+import { getReservationTableIds } from 'src/modules/reservations/helpers/reservation.helper';
+import { TableLockService } from 'src/modules/tables/services/table-lock.service';
 import { CreatePaymentDto } from '../dto/create-payment.dto';
 import { QueryPaymentDto } from '../dto/query-payment.dto';
-import { generateTransactionCode, normalizeClientIp } from '../helpers/payment-crypto.helper';
+import {
+  generateTransactionCode,
+  normalizeClientIp,
+  sanitizePayloadForStorage,
+} from '../helpers/payment-crypto.helper';
+import { assertPaymentOwnership, resolvePaymentTarget } from '../helpers/payment-target.helper';
 import { MomoCallbackRawPayload, MomoGatewayService } from './momo-gateway.service';
 import { SepayGatewayService, SepayIpnPayload } from './sepay-gateway.service';
 
@@ -45,13 +50,6 @@ const RELEASE_LOCK_LUA =
   "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
 
 type CallbackOutcome = 'OK' | 'NOT_FOUND' | 'AMOUNT_MISMATCH' | 'ALREADY_CONFIRMED';
-
-interface ResolvedPaymentTarget {
-  amount: number;
-  orderInfo: string;
-  reservationId: string | null;
-  pickupOrderId: string | null;
-}
 
 interface GatewayProcessInput {
   transactionCode: string;
@@ -73,6 +71,8 @@ export class PaymentsService {
     private readonly sepayGateway: SepayGatewayService,
     private readonly tablesGateway: TablesGateway,
     private readonly mailService: MailService,
+    @Inject(forwardRef(() => TableLockService))
+    private readonly tableLockService: TableLockService,
   ) {}
 
   async createPayment(
@@ -81,7 +81,7 @@ export class PaymentsService {
     rawClientIp?: string,
   ) {
     const clientIp = normalizeClientIp(rawClientIp);
-    const target = await this.resolveTargetAndAmount(dto, user);
+    const target = await resolvePaymentTarget(this.prisma, dto, user);
     const prefix = dto.provider === PaymentProvider.MOMO ? 'MM' : dto.provider === PaymentProvider.SEPAY ? 'SP' : 'PAY';
     const transactionCode = generateTransactionCode(prefix);
     const expiresAt = new Date(Date.now() + PAYMENT_EXPIRY_MINUTES * 60 * 1000);
@@ -246,6 +246,33 @@ export class PaymentsService {
       if (!transactionCode) {
         throw new BadRequestException('Thiếu mã giao dịch thanh toán.');
       }
+
+      const current = await this.fetchTransactionDetails(transactionCode);
+      if (current.status === PaymentStatus.PENDING) {
+        const orderDetail = await this.sepayGateway.fetchOrderStatus(transactionCode);
+        if (orderDetail?.found) {
+          const isPaid =
+            orderDetail.orderStatus === 'CAPTURED' &&
+            (orderDetail.transactionStatus === 'APPROVED' || orderDetail.transactionStatus === '');
+          const isCancelled =
+            orderDetail.orderStatus === 'CANCELLED' || orderDetail.orderStatus === 'FAILED';
+
+          if (isPaid || isCancelled) {
+            const outcome = await this.processGatewayVerification({
+              transactionCode,
+              amount: orderDetail.amount,
+              isSuccess: isPaid,
+              gatewayTransId: orderDetail.gatewayTransId,
+              responseCode: orderDetail.orderStatus,
+              rawPayload: orderDetail.rawPayload,
+            });
+            if (outcome === 'AMOUNT_MISMATCH') {
+              throw new BadRequestException('Số tiền thanh toán không khớp với dữ liệu hệ thống.');
+            }
+          }
+        }
+      }
+
       return this.fetchTransactionDetails(transactionCode);
     }
 
@@ -296,7 +323,7 @@ export class PaymentsService {
     const ownerId = tx.pickupOrder?.userId ?? tx.reservation?.userId ?? tx.userId;
     const branchId = tx.pickupOrder?.branchId ?? tx.reservation?.branchId ?? null;
     if (ownerId || branchId) {
-      this.assertOwnership(ownerId, branchId, user);
+      assertPaymentOwnership(ownerId, branchId, user);
     }
 
     return {
@@ -329,6 +356,84 @@ export class PaymentsService {
     };
   }
 
+  async cancelPendingPayment(transactionCode: string, user?: ICurrentUser) {
+    const txRecord = await this.prisma.paymentTransaction.findUnique({
+      where: { transactionCode },
+      include: {
+        pickupOrder: { select: { id: true, branchId: true, userId: true } },
+        reservation: {
+          select: {
+            id: true,
+            branchId: true,
+            status: true,
+            tableId: true,
+            userId: true,
+            reservationDate: true,
+            reservationTime: true,
+            reservationTables: { select: { tableId: true } },
+          },
+        },
+      },
+    });
+
+    if (!txRecord) {
+      throw new NotFoundException('Không tìm thấy giao dịch thanh toán.');
+    }
+
+    const ownerId = txRecord.pickupOrder?.userId ?? txRecord.reservation?.userId ?? txRecord.userId;
+    const branchId = txRecord.pickupOrder?.branchId ?? txRecord.reservation?.branchId ?? null;
+    if (ownerId || branchId) {
+      assertPaymentOwnership(ownerId, branchId, user);
+    }
+
+    if (txRecord.status !== PaymentStatus.PENDING) {
+      return this.fetchTransactionDetails(transactionCode);
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const res = await tx.paymentTransaction.updateMany({
+        where: { id: txRecord.id, status: PaymentStatus.PENDING },
+        data: {
+          status: PaymentStatus.FAILED,
+          gatewayResponseCode: 'USER_CANCELLED',
+        },
+      });
+
+      if (res.count > 0 && txRecord.purpose === PaymentPurpose.RESERVATION_DEPOSIT && txRecord.reservationId) {
+        await tx.reservation.updateMany({
+          where: { id: txRecord.reservationId, status: ReservationStatus.AWAITING_PAYMENT },
+          data: { status: ReservationStatus.CANCELLED, cancelledReason: 'Khách hàng hủy thanh toán tiền cọc.' },
+        });
+      }
+      return res.count;
+    });
+
+    if (updated > 0 && txRecord.reservation && txRecord.reservation.status === ReservationStatus.AWAITING_PAYMENT) {
+      const tableIds = getReservationTableIds(txRecord.reservation);
+      if (tableIds.length > 0) {
+        const dateStr = txRecord.reservation.reservationDate.toISOString().slice(0, 10);
+        await this.tableLockService.releaseSlotLocksByIds(
+          txRecord.reservation.branchId,
+          tableIds,
+          dateStr,
+          txRecord.reservation.reservationTime,
+        );
+        try {
+          this.tablesGateway.notifyTablesReleased({
+            branchId: txRecord.reservation.branchId,
+            tableIds,
+            date: dateStr,
+            time: txRecord.reservation.reservationTime,
+          });
+        } catch {
+          // Bỏ qua lỗi socket
+        }
+      }
+    }
+
+    return this.fetchTransactionDetails(transactionCode);
+  }
+
   async getPaymentsByTarget(query: QueryPaymentDto, user?: ICurrentUser) {
     if ((!query.pickupOrderId && !query.reservationId) || (query.pickupOrderId && query.reservationId)) {
       throw new BadRequestException(
@@ -344,7 +449,7 @@ export class PaymentsService {
       if (!order) {
         throw new NotFoundException('Không tìm thấy đơn hàng mang về.');
       }
-      this.assertOwnership(order.userId, order.branchId, user);
+      assertPaymentOwnership(order.userId, order.branchId, user);
     } else if (query.reservationId) {
       const reservation = await this.prisma.reservation.findUnique({
         where: { id: query.reservationId },
@@ -353,7 +458,7 @@ export class PaymentsService {
       if (!reservation) {
         throw new NotFoundException('Không tìm thấy đơn đặt bàn.');
       }
-      this.assertOwnership(reservation.userId, reservation.branchId, user);
+      assertPaymentOwnership(reservation.userId, reservation.branchId, user);
     }
 
     const transactions = await this.prisma.paymentTransaction.findMany({
@@ -408,154 +513,6 @@ export class PaymentsService {
     return result.count;
   }
 
-  private async resolveTargetAndAmount(
-    dto: CreatePaymentDto,
-    user?: ICurrentUser,
-  ): Promise<ResolvedPaymentTarget> {
-    if (dto.purpose === PaymentPurpose.PICKUP_ORDER) {
-      if (!dto.pickupOrderId || dto.reservationId) {
-        throw new BadRequestException('Thanh toán đơn mang về yêu cầu pickupOrderId và không truyền reservationId.');
-      }
-      return this.resolvePickupOrderTarget(dto.pickupOrderId, user);
-    }
-
-    if (!dto.reservationId || dto.pickupOrderId) {
-      throw new BadRequestException('Thanh toán đặt bàn yêu cầu reservationId và không truyền pickupOrderId.');
-    }
-    return this.resolveReservationTarget(dto.reservationId, dto.purpose, user);
-  }
-
-  private async resolvePickupOrderTarget(
-    pickupOrderId: string,
-    user?: ICurrentUser,
-  ): Promise<ResolvedPaymentTarget> {
-    const order = await this.prisma.pickupOrder.findUnique({
-      where: { id: pickupOrderId },
-      include: {
-        payments: {
-          where: { purpose: PaymentPurpose.PICKUP_ORDER, status: PaymentStatus.SUCCESS },
-          select: { id: true },
-        },
-      },
-    });
-
-    if (!order) {
-      throw new NotFoundException('Không tìm thấy đơn hàng mang về.');
-    }
-
-    this.assertOwnership(order.userId, order.branchId, user);
-
-    if (order.status === PickupOrderStatus.CANCELLED || order.status === PickupOrderStatus.COMPLETED) {
-      throw new BadRequestException('Đơn hàng đã hoàn tất hoặc đã bị hủy, không thể tạo thanh toán.');
-    }
-    if (order.payments.length > 0) {
-      throw new ConflictException('Đơn hàng này đã được thanh toán thành công.');
-    }
-
-    const amount = Number(order.totalAmount);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      throw new BadRequestException('Tổng tiền đơn hàng không hợp lệ để thanh toán.');
-    }
-
-    return {
-      amount,
-      orderInfo: `Thanh toan don mang ve ${order.orderCode}`,
-      pickupOrderId: order.id,
-      reservationId: null,
-    };
-  }
-
-  private async resolveReservationTarget(
-    reservationId: string,
-    purpose: PaymentPurpose,
-    user?: ICurrentUser,
-  ): Promise<ResolvedPaymentTarget> {
-    const reservation = await this.prisma.reservation.findUnique({
-      where: { id: reservationId },
-      include: {
-        orders: { include: { menuItem: { select: { id: true, name: true, imageUrl: true } } } },
-        invoices: RESERVATION_INVOICES_BILL_INCLUDE,
-        payments: {
-          where: { status: PaymentStatus.SUCCESS },
-          select: { id: true, purpose: true, status: true, amount: true },
-        },
-      },
-    });
-
-    if (!reservation) {
-      throw new NotFoundException('Không tìm thấy đơn đặt bàn.');
-    }
-
-    this.assertOwnership(reservation.userId, reservation.branchId, user);
-
-    if (
-      reservation.status === ReservationStatus.CANCELLED ||
-      reservation.status === ReservationStatus.NO_SHOW
-    ) {
-      throw new BadRequestException('Đơn đặt bàn đã hủy hoặc quá hạn, không thể thanh toán.');
-    }
-
-    if (purpose === PaymentPurpose.RESERVATION_DEPOSIT) {
-      const totalPreOrderAmount = reservation.orders.reduce(
-        (sum, item) => sum + Number(item.unitPrice) * item.quantity,
-        0,
-      );
-      if (reservation.status === ReservationStatus.COMPLETED) {
-        throw new BadRequestException('Đơn đặt bàn đã kết thúc, không thể thanh toán đặt cọc.');
-      }
-      if (reservation.payments.some((p) => p.purpose === PaymentPurpose.RESERVATION_DEPOSIT)) {
-        throw new ConflictException('Đơn đặt bàn này đã được thanh toán cọc trước đó.');
-      }
-      if (totalPreOrderAmount <= 0) {
-        throw new BadRequestException('Đơn đặt bàn chưa có món đặt trước để thanh toán.');
-      }
-      return {
-        amount: totalPreOrderAmount,
-        orderInfo: `Thanh toan dat ban ${reservation.reservationCode}`,
-        reservationId: reservation.id,
-        pickupOrderId: null,
-      };
-    }
-
-    const breakdown = computeReservationBillBreakdown(reservation);
-    const hasSettlement = reservation.payments.some(
-      (p) => p.purpose === PaymentPurpose.RESERVATION_SETTLEMENT,
-    );
-    if (hasSettlement && breakdown.remainingAmount <= 0) {
-      throw new ConflictException('Hóa đơn đặt bàn này đã được quyết toán.');
-    }
-
-    if (breakdown.remainingAmount <= 0) {
-      throw new BadRequestException('Hóa đơn không có số dư cần thanh toán.');
-    }
-
-    return {
-      amount: breakdown.remainingAmount,
-      orderInfo: `Quyet toan hoa don ${reservation.reservationCode}`,
-      reservationId: reservation.id,
-      pickupOrderId: null,
-    };
-  }
-
-  private assertOwnership(
-    ownerUserId: string | null,
-    branchId: string | null,
-    user?: ICurrentUser,
-  ) {
-    if (ownerUserId) {
-      if (!user) {
-        throw new UnauthorizedException('Vui lòng đăng nhập để thực hiện thao tác thanh toán cho đơn này.');
-      }
-      if (user.role === Role.USER && ownerUserId !== user.id) {
-        throw new ForbiddenException('Bạn không có quyền truy cập giao dịch của đơn này.');
-      }
-    }
-
-    if (user && user.role === Role.STAFF && user.branchId && branchId && branchId !== user.branchId) {
-      throw new ForbiddenException('Bạn chỉ được phép thao tác giao dịch thuộc chi nhánh của mình.');
-    }
-  }
-
   private async processGatewayVerification(input: GatewayProcessInput): Promise<CallbackOutcome> {
     const lockKey = `payment:lock:${input.transactionCode}`;
     const lockValue = crypto.randomUUID();
@@ -570,7 +527,18 @@ export class PaymentsService {
         where: { transactionCode: input.transactionCode },
         include: {
           pickupOrder: { select: { id: true, branchId: true, status: true, userId: true } },
-          reservation: { select: { id: true, branchId: true, status: true, tableId: true, userId: true } },
+          reservation: {
+            select: {
+              id: true,
+              branchId: true,
+              status: true,
+              tableId: true,
+              userId: true,
+              reservationDate: true,
+              reservationTime: true,
+              reservationTables: { select: { tableId: true } },
+            },
+          },
         },
       });
 
@@ -593,10 +561,13 @@ export class PaymentsService {
         return 'ALREADY_CONFIRMED';
       }
 
+      const wasAwaitingPayment = txRecord.reservation?.status === ReservationStatus.AWAITING_PAYMENT;
+      const reservationTableIds = txRecord.reservation ? getReservationTableIds(txRecord.reservation) : [];
+
       const normalizedGatewayTransId =
         input.gatewayTransId && input.gatewayTransId !== '0' ? input.gatewayTransId : null;
       const targetStatus = input.isSuccess ? PaymentStatus.SUCCESS : PaymentStatus.FAILED;
-      const sanitizedPayload = this.sanitizePayloadForStorage(input.rawPayload);
+      const sanitizedPayload = sanitizePayloadForStorage(input.rawPayload) as Prisma.InputJsonValue;
 
       let txResult: {
         count: number;
@@ -637,14 +608,29 @@ export class PaymentsService {
           }
 
           if (
-            input.isSuccess &&
             txRecord.purpose === PaymentPurpose.RESERVATION_DEPOSIT &&
             txRecord.reservationId
           ) {
-            await tx.reservation.updateMany({
-              where: { id: txRecord.reservationId, status: ReservationStatus.PENDING },
-              data: { status: ReservationStatus.CONFIRMED },
-            });
+            if (input.isSuccess) {
+              await tx.reservation.updateMany({
+                where: {
+                  id: txRecord.reservationId,
+                  status: { in: [ReservationStatus.AWAITING_PAYMENT, ReservationStatus.PENDING] },
+                },
+                data: { status: ReservationStatus.CONFIRMED },
+              });
+            } else {
+              await tx.reservation.updateMany({
+                where: {
+                  id: txRecord.reservationId,
+                  status: ReservationStatus.AWAITING_PAYMENT,
+                },
+                data: {
+                  status: ReservationStatus.CANCELLED,
+                  cancelledReason: 'Thanh toán tiền cọc không thành công hoặc bị hủy.',
+                },
+              });
+            }
           }
 
           const closedInvoices: Array<{
@@ -668,58 +654,20 @@ export class PaymentsService {
               data: { status: ReservationStatus.COMPLETED },
             });
 
-            if (txRecord.reservation?.tableId) {
+            if (reservationTableIds.length > 0) {
               await tx.restaurantTable.updateMany({
-                where: { id: txRecord.reservation.tableId },
+                where: { id: { in: reservationTableIds } },
                 data: { status: RestaurantTableStatus.DIRTY },
               });
             }
 
-            if (tx.invoice) {
-              const openInvoices = await tx.invoice.findMany({
-                where: {
-                  reservationId: txRecord.reservationId,
-                  status: { in: [InvoiceStatus.OPEN, InvoiceStatus.PAYMENT_PENDING] },
-                },
-                include: {
-                  batches: {
-                    include: { items: true },
-                  },
-                },
-              });
-
-              const now = new Date();
-              for (const inv of openInvoices) {
-                const hasBatches = Array.isArray(inv.batches) && inv.batches.length > 0;
-                const nextStatus = hasBatches ? InvoiceStatus.PAID : InvoiceStatus.CANCELLED;
-                const liveFoodTotal = hasBatches
-                  ? computeBatchesFoodTotal(inv.batches)
-                  : Number(inv.subtotal);
-                const finalAmt = Math.max(0, liveFoodTotal - Number(inv.discountAmount || 0));
-
-                const closedInv = await tx.invoice.update({
-                  where: { id: inv.id },
-                  data: {
-                    status: nextStatus,
-                    ...(hasBatches
-                      ? {
-                          subtotal: liveFoodTotal,
-                          finalAmount: finalAmt,
-                          paymentMethod: txRecord.provider,
-                        }
-                      : {}),
-                    closedAt: now,
-                  },
-                });
-                closedInvoices.push({
-                  id: closedInv.id,
-                  invoiceCode: closedInv.invoiceCode,
-                  branchId: closedInv.branchId,
-                  tableId: closedInv.tableId,
-                  finalAmount: Number(closedInv.finalAmount),
-                });
-              }
-            }
+            const closedList = await closeReservationInvoicesInTx(
+              tx,
+              txRecord.reservationId,
+              txRecord.provider,
+              new Date(),
+            );
+            closedInvoices.push(...closedList);
           }
 
           return { count: res.count, closedInvoices };
@@ -764,26 +712,97 @@ export class PaymentsService {
             } as { branchId: string; userId?: string | null });
           }
 
+          if (
+            !input.isSuccess &&
+            wasAwaitingPayment &&
+            txRecord.purpose === PaymentPurpose.RESERVATION_DEPOSIT &&
+            txRecord.reservation
+          ) {
+            if (reservationTableIds.length > 0) {
+              const dateStr = txRecord.reservation.reservationDate.toISOString().slice(0, 10);
+              await this.tableLockService.releaseSlotLocksByIds(
+                branchId,
+                reservationTableIds,
+                dateStr,
+                txRecord.reservation.reservationTime,
+              );
+              this.tablesGateway.notifyTablesReleased({
+                branchId,
+                tableIds: reservationTableIds,
+                date: dateStr,
+                time: txRecord.reservation.reservationTime,
+              });
+            }
+          }
+
           if (input.isSuccess && txRecord.reservationId) {
             const nextStatus =
               txRecord.purpose === PaymentPurpose.RESERVATION_SETTLEMENT
                 ? ReservationStatus.COMPLETED
                 : ReservationStatus.CONFIRMED;
 
-            this.tablesGateway.server?.to(`branch:${branchId}`).emit('reservation:statusChanged', {
-              id: txRecord.reservationId,
-              status: nextStatus,
-            });
-            this.tablesGateway.notifyReservationUpdated?.(branchId, {
-              id: txRecord.reservationId,
-              status: nextStatus,
-              userId: txRecord.reservation?.userId ?? null,
-            });
+            if (txRecord.purpose === PaymentPurpose.RESERVATION_DEPOSIT && txRecord.reservation) {
+              const dateStr = txRecord.reservation.reservationDate.toISOString().slice(0, 10);
+              if (reservationTableIds.length > 0) {
+                await this.tableLockService.consumeSlotLocks(
+                  branchId,
+                  reservationTableIds,
+                  dateStr,
+                  txRecord.reservation.reservationTime,
+                  txRecord.reservation.userId,
+                );
+                this.tablesGateway.notifyTablesReserved({
+                  branchId,
+                  tableIds: reservationTableIds,
+                  date: dateStr,
+                  time: txRecord.reservation.reservationTime,
+                });
+              }
+
+              const confirmedRes = await this.prisma.reservation.findUnique({
+                where: { id: txRecord.reservationId },
+                include: {
+                  ...RESERVATION_LIST_INCLUDE,
+                  branch: true,
+                  user: { select: { email: true, fullName: true } },
+                },
+              });
+
+              if (confirmedRes) {
+                if (wasAwaitingPayment) {
+                  this.tablesGateway.notifyReservationCreated(branchId, confirmedRes);
+                } else {
+                  this.tablesGateway.notifyReservationUpdated?.(branchId, confirmedRes);
+                }
+
+                const recipientEmail = confirmedRes.customerEmail || confirmedRes.user?.email;
+                if (recipientEmail) {
+                  this.mailService
+                    .sendReservationConfirmedEmail(
+                      recipientEmail,
+                      buildReservationConfirmedMailPayload(confirmedRes),
+                    )
+                    .catch((err) => {
+                      this.logger.error(`[Mail] Gửi email xác nhận đặt bàn thất bại cho ${recipientEmail}:`, err);
+                    });
+                }
+              }
+            } else {
+              this.tablesGateway.server?.to(`branch:${branchId}`).emit('reservation:statusChanged', {
+                id: txRecord.reservationId,
+                status: nextStatus,
+              });
+              this.tablesGateway.notifyReservationUpdated?.(branchId, {
+                id: txRecord.reservationId,
+                status: nextStatus,
+                userId: txRecord.reservation?.userId ?? null,
+              });
+            }
 
             if (txRecord.purpose === PaymentPurpose.RESERVATION_SETTLEMENT) {
-              if (txRecord.reservation?.tableId) {
+              for (const tableId of reservationTableIds) {
                 this.tablesGateway.notifyTableStatusChanged(branchId, {
-                  tableId: txRecord.reservation.tableId,
+                  tableId,
                   status: RestaurantTableStatus.DIRTY,
                 });
               }
@@ -859,17 +878,5 @@ export class PaymentsService {
         transactionCode,
       }),
     );
-  }
-
-  private sanitizePayloadForStorage(rawPayload: Record<string, unknown>): Prisma.InputJsonValue {
-    const cleaned: Record<string, string | number | boolean | null> = {};
-    for (const [key, value] of Object.entries(rawPayload)) {
-      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || value === null) {
-        cleaned[key] = value;
-      } else if (value !== undefined) {
-        cleaned[key] = JSON.stringify(value);
-      }
-    }
-    return cleaned;
   }
 }

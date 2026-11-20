@@ -19,6 +19,7 @@ import { GatewayModule } from './gateway/gateway.module';
 import { PickupOrdersModule } from './modules/pickup-orders/pickup-orders.module';
 import { DineInModule } from './modules/dine-in/dine-in.module';
 import { KitchenModule } from './modules/kitchen/kitchen.module';
+import { NgrokTunnelService } from './core/ngrok/ngrok-tunnel.service';
 
 @Module({
   imports: [
@@ -58,6 +59,7 @@ import { KitchenModule } from './modules/kitchen/kitchen.module';
   ],
   controllers: [],
   providers: [
+    NgrokTunnelService,
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,

@@ -55,6 +55,7 @@ async function bootstrap() {
   SwaggerModule.setup('api/docs', app, documentFactory);
 
   const port = configService.getOrThrow<number>('PORT');
+  app.enableShutdownHooks();
   await app.listen(port);
 }
 void bootstrap();

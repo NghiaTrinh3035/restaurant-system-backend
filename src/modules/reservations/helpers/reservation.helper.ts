@@ -15,6 +15,26 @@ export const ACTIVE_RESERVATION_STATUSES: ReservationStatus[] = [
   ReservationStatus.SEATED,
 ];
 
+export const MAX_RESERVATION_TABLES = 5;
+
+export function getReservationTableIds(reservation: {
+  tableId?: string | null;
+  reservationTables?: Array<{ tableId: string }>;
+}): string[] {
+  const ids = new Set<string>();
+  if (reservation.reservationTables) {
+    for (const rt of reservation.reservationTables) {
+      if (rt.tableId) {
+        ids.add(rt.tableId);
+      }
+    }
+  }
+  if (reservation.tableId) {
+    ids.add(reservation.tableId);
+  }
+  return Array.from(ids);
+}
+
 export function generateReservationCode(dateStr: string): string {
   const cleanDate = dateStr.replace(/-/g, '');
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';

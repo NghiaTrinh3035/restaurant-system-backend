@@ -84,3 +84,17 @@ export function generateTransactionCode(prefix: string): string {
   const randomSuffix = crypto.randomBytes(3).toString('hex').toUpperCase();
   return `${prefix}${timestamp}${randomSuffix}`;
 }
+
+export function sanitizePayloadForStorage(
+  rawPayload: Record<string, unknown>,
+): Record<string, string | number | boolean | null> {
+  const cleaned: Record<string, string | number | boolean | null> = {};
+  for (const [key, value] of Object.entries(rawPayload)) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || value === null) {
+      cleaned[key] = value;
+    } else if (value !== undefined) {
+      cleaned[key] = JSON.stringify(value);
+    }
+  }
+  return cleaned;
+}

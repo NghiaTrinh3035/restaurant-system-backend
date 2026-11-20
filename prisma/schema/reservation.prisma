@@ -22,6 +22,7 @@ model Reservation {
   user                User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
   tableType           TableType?         @relation(fields: [tableTypeId], references: [id], onDelete: SetNull)
   table               RestaurantTable?     @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  reservationTables   ReservationTable[]
   orders              ReservationOrder[]
   invoices            Invoice[]
   payments            PaymentTransaction[]
@@ -49,7 +50,21 @@ model ReservationOrder {
   @@map("reservation_orders")
 }
 
+model ReservationTable {
+  id            String          @id @default(uuid()) @db.Uuid
+  reservationId String          @db.Uuid
+  tableId       String          @db.Uuid
+  createdAt     DateTime        @default(now())
+  reservation   Reservation     @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  table         RestaurantTable @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  @@unique([reservationId, tableId])
+  @@index([tableId])
+  @@map("reservation_tables")
+}
+
 enum ReservationStatus {
+  AWAITING_PAYMENT
   PENDING
   CONFIRMED
   SEATED

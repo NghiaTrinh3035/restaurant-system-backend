@@ -10,11 +10,13 @@ import {
   Max,
   Matches,
   IsArray,
+  ArrayMaxSize,
   ValidateNested,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { PaymentProvider } from '@prisma/client';
+import { MAX_RESERVATION_TABLES } from '../helpers/reservation.helper';
 
 export class PreOrderItemDto {
   @ApiProperty({ description: 'ID món ăn' })
@@ -82,6 +84,15 @@ export class CreateReservationDto {
   @IsUUID()
   @IsOptional()
   tableId?: string;
+
+  @ApiPropertyOptional({ description: `Danh sách ID nhiều bàn đã giữ trên sơ đồ (tối đa ${MAX_RESERVATION_TABLES} bàn)` })
+  @IsArray()
+  @ArrayMaxSize(MAX_RESERVATION_TABLES, {
+    message: `Chỉ được chọn tối đa ${MAX_RESERVATION_TABLES} bàn trong một đơn đặt bàn.`,
+  })
+  @IsUUID('4', { each: true })
+  @IsOptional()
+  tableIds?: string[];
 
   @ApiPropertyOptional({ description: 'ID loại bàn mong muốn' })
   @IsUUID()

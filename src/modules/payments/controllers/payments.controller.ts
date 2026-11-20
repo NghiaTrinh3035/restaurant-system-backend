@@ -109,6 +109,18 @@ export class PaymentsController {
     return this.paymentsService.getPaymentsByTarget(query, user);
   }
 
+  @Post(':transactionCode/cancel')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Hủy giao dịch thanh toán đang chờ (khi khách hủy hoặc cổng báo lỗi)' })
+  @ResponseMessage('Đã cập nhật trạng thái hủy giao dịch thanh toán.')
+  async cancelPendingPayment(
+    @Param('transactionCode') transactionCode: string,
+    @CurrentUser() user?: ICurrentUser,
+  ) {
+    return this.paymentsService.cancelPendingPayment(transactionCode, user);
+  }
+
   @Get(':transactionCode')
   @Public()
   @HttpCode(HttpStatus.OK)

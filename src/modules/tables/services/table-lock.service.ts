@@ -6,8 +6,9 @@ import { SearchAvailableTablesDto } from '../dto/search-available-tables.dto';
 import { RestaurantBranchStatus, RestaurantTableStatus, Role } from '@prisma/client';
 import {
   ACTIVE_RESERVATION_STATUSES,
+  MAX_RESERVATION_TABLES,
   getLocalNow,
-  isCapacitySuitable,
+  getReservationTableIds,
   isTimeRangeOverlap,
   timeStringToMinutes,
   toDateOnly,
@@ -37,7 +38,7 @@ export interface IStoredLock extends ITableLockInfo {
 }
 
 const LOCK_PREFIX = 'table:lock';
-const OWNER_PREFIX = 'table:lock-owner';
+const OWNER_PREFIX = 'table:lock-owners';
 
 @Injectable()
 export class TableLockService {
@@ -76,19 +77,19 @@ export class TableLockService {
       orderBy: [{ floor: 'asc' }, { tableType: { capacity: 'asc' } }, { tableNumber: 'asc' }],
     });
 
-    const capacities = tables.map((t) => t.tableType.capacity);
-    const suitable = tables.filter(
-      (t) =>
-        isCapacitySuitable(t.tableType.capacity, dto.partySize, capacities) &&
-        (!dto.floor || t.floor === dto.floor),
-    );
+    const candidateTables = tables.filter((t) => !dto.floor || t.floor === dto.floor);
 
     const reservedIds = await this.getReservedTableIds(dto.branchId, dto.date, startMins, duration);
     const occupiedBlocks = this.isNearNow(dto.date, startMins, duration);
     const locks = await this.getLocksOnDate(dto.branchId, dto.date);
 
-    const results: any[] = [];
-    for (const table of suitable) {
+    const results: Array<
+      (typeof tables)[number] & {
+        isReserved: boolean;
+        lockStatus: { isLocked: boolean; lockedByMe: boolean; expiresIn: number | null };
+      }
+    > = [];
+    for (const table of candidateTables) {
       const overlappingLocks = locks.filter(
         (l) =>
           l.tableId === table.id &&
@@ -116,14 +117,14 @@ export class TableLockService {
   }
 
   /**
-   * Giữ bàn tạm thời cho một khung giờ (mặc định 10 phút). Mỗi người dùng chỉ giữ 1 bàn tại một thời điểm:
-   * giữ bàn mới sẽ tự nhả bàn cũ (trả về trong `releasedLock` để broadcast).
+   * Giữ bàn tạm thời cho một khung giờ (mặc định 10 phút). Cho phép giữ tối đa MAX_RESERVATION_TABLES bàn
+   * trong cùng khung giờ (chi nhánh + ngày + giờ); đổi khung giờ hoặc chi nhánh sẽ nhả các bàn cũ.
    */
   async lockTable(
     slot: ITableSlot & { guestCount?: number },
     user: { id: string; email: string },
     ttlSeconds = 600,
-  ): Promise<{ success: boolean; reason?: string; lockInfo?: ITableLockInfo; releasedLock?: ITableLockInfo }> {
+  ): Promise<{ success: boolean; reason?: string; lockInfo?: ITableLockInfo; releasedLocks?: ITableLockInfo[] }> {
     const table = await this.prisma.restaurantTable.findFirst({
       where: { id: slot.tableId, branchId: slot.branchId, isActive: true },
       include: { tableType: true, branch: { select: { slotDurationMinutes: true, status: true } } },
@@ -137,17 +138,6 @@ export class TableLockService {
     }
     if (table.status === RestaurantTableStatus.DIRTY) {
       return { success: false, reason: 'Bàn đang được nhân viên dọn dẹp, vui lòng chọn bàn khác hoặc chờ trong giây lát.' };
-    }
-
-    if (slot.guestCount) {
-      const branchTables = await this.prisma.restaurantTable.findMany({
-        where: { branchId: slot.branchId, isActive: true, status: { not: RestaurantTableStatus.MAINTENANCE } },
-        select: { tableType: { select: { capacity: true } } },
-      });
-      const capacities = branchTables.map((t) => t.tableType.capacity);
-      if (!isCapacitySuitable(table.tableType.capacity, slot.guestCount, capacities)) {
-        return { success: false, reason: `Bàn ${table.tableNumber} không phù hợp cho ${slot.guestCount} khách.` };
-      }
     }
 
     const duration = table.branch.slotDurationMinutes || 90;
@@ -170,8 +160,17 @@ export class TableLockService {
     }
 
     const key = this.lockKey(slot);
-    const releasedLock = await this.releasePreviousUserLock(user.id, key);
+    const { sameSlotKeys, releasedLocks } = await this.reconcileUserLocksForSlot(user.id, slot);
 
+    if (!sameSlotKeys.includes(key) && sameSlotKeys.length >= MAX_RESERVATION_TABLES) {
+      return {
+        success: false,
+        reason: `Bạn chỉ có thể giữ tối đa ${MAX_RESERVATION_TABLES} bàn cùng lúc cho một đơn đặt bàn.`,
+        releasedLocks,
+      };
+    }
+
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
     const lockPayload: ITableLockInfo = {
       tableId: slot.tableId,
       branchId: slot.branchId,
@@ -180,7 +179,7 @@ export class TableLockService {
       lockedBy: user.id,
       userEmail: user.email,
       lockedAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString(),
+      expiresAt,
       tableNumber: table.tableNumber,
     };
 
@@ -189,7 +188,7 @@ export class TableLockService {
     if (!acquired) {
       const existing = this.parseLock(await this.redisClient.get(key));
       if (existing?.lockedBy !== user.id) {
-        return { success: false, reason: 'Bàn này đang được giữ bởi khách hàng khác.', releasedLock };
+        return { success: false, reason: 'Bàn này đang được giữ bởi khách hàng khác.', releasedLocks };
       }
       await this.redisClient.set(key, JSON.stringify(lockPayload), 'EX', ttlSeconds);
     }
@@ -197,11 +196,21 @@ export class TableLockService {
     // Chống race: người khác vừa giữ cùng bàn ở khung giờ chồng lấn
     if (await this.hasBlockingLock(slot, user.id, duration)) {
       await this.redisClient.del(key);
-      return { success: false, reason: 'Bàn này vừa được khách hàng khác giữ.', releasedLock };
+      return { success: false, reason: 'Bàn này vừa được khách hàng khác giữ.', releasedLocks };
     }
 
-    await this.redisClient.set(this.ownerKey(user.id), key, 'EX', ttlSeconds);
-    return { success: true, lockInfo: lockPayload, releasedLock };
+    const ownerSet = this.ownerKey(user.id);
+    await this.redisClient.sadd(ownerSet, key);
+    await this.redisClient.expire(ownerSet, ttlSeconds);
+
+    // Đồng bộ thời gian hết hạn cho các bàn cùng khung giờ mà khách đang giữ
+    for (const existingKey of sameSlotKeys) {
+      if (existingKey !== key) {
+        await this.redisClient.expire(existingKey, ttlSeconds);
+      }
+    }
+
+    return { success: true, lockInfo: lockPayload, releasedLocks };
   }
 
   /**
@@ -233,13 +242,72 @@ export class TableLockService {
     return existing?.lockedBy ?? null;
   }
 
-  /** Xóa khóa sau khi đơn đặt bàn đã được tạo (bàn chuyển sang trạng thái đã đặt) */
+  /** Xóa khóa sau khi đơn đặt bàn đã được xác nhận */
   async consumeLock(slot: ITableSlot, userId: string): Promise<void> {
     const key = this.lockKey(slot);
     const existing = this.parseLock(await this.redisClient.get(key));
     if (existing?.lockedBy === userId) {
       await this.deleteLock(key, userId);
     }
+  }
+
+  /** Xóa toàn bộ khóa của một đơn đặt nhiều bàn sau khi đã xác nhận */
+  async consumeSlotLocks(
+    branchId: string,
+    tableIds: string[],
+    date: string,
+    time: string,
+    userId: string | null,
+  ): Promise<void> {
+    for (const tableId of tableIds) {
+      const key = this.lockKey({ branchId, tableId, date, time });
+      const existing = this.parseLock(await this.redisClient.get(key));
+      if (!existing) continue;
+      if (!userId || existing.lockedBy === userId) {
+        await this.deleteLock(key, existing.lockedBy);
+      }
+    }
+  }
+
+  /** Gia hạn khóa (ví dụ 15 phút khi khách đang ở cổng thanh toán) */
+  async extendSlotLocks(
+    branchId: string,
+    tableIds: string[],
+    date: string,
+    time: string,
+    userId: string,
+    ttlSeconds: number,
+  ): Promise<void> {
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+    const ownerSet = this.ownerKey(userId);
+    for (const tableId of tableIds) {
+      const key = this.lockKey({ branchId, tableId, date, time });
+      const existing = this.parseLock(await this.redisClient.get(key));
+      if (existing && existing.lockedBy === userId) {
+        const updated: ITableLockInfo = { ...existing, expiresAt };
+        await this.redisClient.set(key, JSON.stringify(updated), 'EX', ttlSeconds);
+        await this.redisClient.sadd(ownerSet, key);
+      }
+    }
+    await this.redisClient.expire(ownerSet, ttlSeconds);
+  }
+
+  /** Giải phóng khóa theo danh sách bàn (khi thanh toán hủy/lỗi/hết hạn) */
+  async releaseSlotLocksByIds(
+    branchId: string,
+    tableIds: string[],
+    date: string,
+    time: string,
+  ): Promise<ITableLockInfo[]> {
+    const released: ITableLockInfo[] = [];
+    for (const tableId of tableIds) {
+      const key = this.lockKey({ branchId, tableId, date, time });
+      const existing = this.parseLock(await this.redisClient.get(key));
+      if (!existing) continue;
+      await this.deleteLock(key, existing.lockedBy);
+      released.push(existing);
+    }
+    return released;
   }
 
   private lockKey(slot: ITableSlot): string {
@@ -261,21 +329,46 @@ export class TableLockService {
 
   private async deleteLock(key: string, ownerId: string): Promise<void> {
     await this.redisClient.del(key);
-    const ownerKey = this.ownerKey(ownerId);
-    if ((await this.redisClient.get(ownerKey)) === key) {
-      await this.redisClient.del(ownerKey);
-    }
+    await this.redisClient.srem(this.ownerKey(ownerId), key);
   }
 
-  private async releasePreviousUserLock(userId: string, nextKey: string): Promise<ITableLockInfo | undefined> {
-    const previousKey = await this.redisClient.get(this.ownerKey(userId));
-    if (!previousKey || previousKey === nextKey) return undefined;
+  private async reconcileUserLocksForSlot(
+    userId: string,
+    targetSlot: ITableSlot,
+  ): Promise<{ sameSlotKeys: string[]; releasedLocks: ITableLockInfo[] }> {
+    const ownerSet = this.ownerKey(userId);
+    const keys = await this.redisClient.smembers(ownerSet);
+    if (keys.length === 0) {
+      return { sameSlotKeys: [], releasedLocks: [] };
+    }
 
-    const previous = this.parseLock(await this.redisClient.get(previousKey));
-    if (previous?.lockedBy !== userId) return undefined;
+    const raws = await this.redisClient.mget(keys);
+    const sameSlotKeys: string[] = [];
+    const releasedLocks: ITableLockInfo[] = [];
 
-    await this.redisClient.del(previousKey);
-    return previous;
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      const info = this.parseLock(raws[i]);
+      if (!info || info.lockedBy !== userId) {
+        await this.redisClient.srem(ownerSet, key);
+        continue;
+      }
+
+      const sameSlot =
+        info.branchId === targetSlot.branchId &&
+        info.date === targetSlot.date &&
+        info.time === targetSlot.time;
+
+      if (sameSlot) {
+        sameSlotKeys.push(key);
+      } else {
+        await this.redisClient.del(key);
+        await this.redisClient.srem(ownerSet, key);
+        releasedLocks.push(info);
+      }
+    }
+
+    return { sameSlotKeys, releasedLocks };
   }
 
   private async hasBlockingLock(slot: ITableSlot, userId: string, duration: number): Promise<boolean> {
@@ -334,18 +427,34 @@ export class TableLockService {
         branchId,
         reservationDate: toDateOnly(date),
         status: { in: ACTIVE_RESERVATION_STATUSES },
-        tableId: tableId ?? { not: null },
+        ...(tableId
+          ? {
+              OR: [
+                { tableId },
+                { reservationTables: { some: { tableId } } },
+              ],
+            }
+          : {
+              OR: [
+                { tableId: { not: null } },
+                { reservationTables: { some: {} } },
+              ],
+            }),
       },
-      select: { tableId: true, reservationTime: true, slotDurationMinutes: true },
+      select: {
+        tableId: true,
+        reservationTables: { select: { tableId: true } },
+        reservationTime: true,
+        slotDurationMinutes: true,
+      },
     });
 
     const ids = new Set<string>();
     for (const r of reservations) {
-      if (
-        r.tableId &&
-        isTimeRangeOverlap(startMins, duration, timeStringToMinutes(r.reservationTime), r.slotDurationMinutes)
-      ) {
-        ids.add(r.tableId);
+      if (isTimeRangeOverlap(startMins, duration, timeStringToMinutes(r.reservationTime), r.slotDurationMinutes)) {
+        for (const id of getReservationTableIds(r)) {
+          ids.add(id);
+        }
       }
     }
     return ids;

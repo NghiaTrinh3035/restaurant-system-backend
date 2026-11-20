@@ -1,6 +1,7 @@
-import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ReservationStatus } from '@prisma/client';
+import { MAX_RESERVATION_TABLES } from '../helpers/reservation.helper';
 
 export class UpdateReservationStatusDto {
   @ApiProperty({
@@ -26,4 +27,15 @@ export class UpdateReservationStatusDto {
   @IsOptional()
   @IsUUID('4', { message: 'ID bàn phải là định dạng UUID hợp lệ.' })
   tableId?: string;
+
+  @ApiPropertyOptional({
+    description: `Danh sách ID nhiều bàn được xếp cho đơn (tối đa ${MAX_RESERVATION_TABLES} bàn)`,
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_RESERVATION_TABLES, {
+    message: `Chỉ được gán tối đa ${MAX_RESERVATION_TABLES} bàn cho một đơn đặt bàn.`,
+  })
+  @IsUUID('4', { each: true, message: 'Mỗi ID bàn phải là định dạng UUID hợp lệ.' })
+  tableIds?: string[];
 }

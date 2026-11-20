@@ -22,9 +22,10 @@ model RestaurantTable {
   tableTypeId String                @db.Uuid
 
   branch       RestaurantBranch      @relation(fields: [branchId], references: [id])
-  tableType    TableType             @relation(fields: [tableTypeId], references: [id])
-  reservations Reservation[]
-  invoices     Invoice[]
+  tableType         TableType             @relation(fields: [tableTypeId], references: [id])
+  reservations      Reservation[]
+  reservationTables ReservationTable[]
+  invoices          Invoice[]
   orderBatches OrderBatch[]
 
   @@unique([branchId, tableNumber])

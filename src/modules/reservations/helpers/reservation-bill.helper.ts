@@ -44,6 +44,10 @@ export const RESERVATION_LIST_INCLUDE = {
   branch: { select: { id: true, name: true, phone: true, streetAddress: true } },
   tableType: true,
   table: true,
+  reservationTables: {
+    include: { table: { include: { tableType: true } } },
+    orderBy: { createdAt: 'asc' as const },
+  },
   orders: { include: { menuItem: true } },
   invoices: RESERVATION_INVOICES_BILL_INCLUDE,
   payments: {
@@ -55,6 +59,10 @@ export const RESERVATION_LIST_INCLUDE = {
 export const RESERVATION_BILL_INCLUDE = {
   branch: { select: { id: true, name: true, phone: true, streetAddress: true, address: true } },
   table: { select: { id: true, tableNumber: true, floor: true } },
+  reservationTables: {
+    include: { table: { select: { id: true, tableNumber: true, floor: true } } },
+    orderBy: { createdAt: 'asc' as const },
+  },
   orders: {
     include: {
       menuItem: { select: { id: true, name: true, imageUrl: true } },
@@ -225,7 +233,142 @@ export function computeReservationBillBreakdown(reservation: BillReservationSour
 
 export function formatPaymentProviderLabel(provider: string): string {
   if (provider === PaymentProvider.MOMO) return 'Ví MoMo';
+  if (provider === PaymentProvider.SEPAY) return 'Cổng SePay';
   return 'Tiền mặt tại quầy';
+}
+
+export function formatReservationTableNames(reservation: {
+  table?: { tableNumber: string; floor: number } | null;
+  reservationTables?: Array<{ table?: { tableNumber: string; floor: number } | null }>;
+}): { tableName: string | null; floor: number | null } {
+  const fromPivot = (reservation.reservationTables || [])
+    .map((rt) => rt.table)
+    .filter((t): t is { tableNumber: string; floor: number } => Boolean(t));
+
+  if (fromPivot.length > 0) {
+    return {
+      tableName: fromPivot.map((t) => t.tableNumber).join(', '),
+      floor: fromPivot[0].floor,
+    };
+  }
+  if (reservation.table) {
+    return {
+      tableName: reservation.table.tableNumber,
+      floor: reservation.table.floor,
+    };
+  }
+  return { tableName: null, floor: null };
+}
+
+export function buildReservationConfirmedMailPayload(reservation: {
+  customerName: string;
+  reservationCode: string;
+  reservationDate: Date | string;
+  reservationTime: string;
+  guestCount: number;
+  specialNotes?: string | null;
+  branch?: {
+    name?: string | null;
+    address?: string | null;
+    streetAddress?: string | null;
+    phone?: string | null;
+  } | null;
+  table?: { tableNumber: string; floor: number } | null;
+  reservationTables?: Array<{ table?: { tableNumber: string; floor: number } | null }>;
+  orders?: Array<{
+    quantity: number;
+    unitPrice: unknown;
+    menuItem?: { name?: string | null } | null;
+  }>;
+}) {
+  const dateStr =
+    reservation.reservationDate instanceof Date
+      ? reservation.reservationDate.toISOString().slice(0, 10)
+      : String(reservation.reservationDate).slice(0, 10);
+  const { tableName, floor } = formatReservationTableNames(reservation);
+
+  return {
+    customerName: reservation.customerName,
+    reservationCode: reservation.reservationCode,
+    branchName: reservation.branch?.name || 'FoodHub Restaurant',
+    branchAddress: reservation.branch?.address || reservation.branch?.streetAddress || null,
+    branchPhone: reservation.branch?.phone || null,
+    reservationDate: dateStr,
+    reservationTime: reservation.reservationTime,
+    guestCount: reservation.guestCount,
+    tableName,
+    floor,
+    specialNotes: reservation.specialNotes || null,
+    orders: (reservation.orders || []).map((o) => ({
+      name: o.menuItem?.name || 'Món ăn',
+      quantity: o.quantity,
+      unitPrice: Number(o.unitPrice),
+      subtotal: Number(o.unitPrice) * o.quantity,
+    })),
+  };
+}
+
+export interface ClosedInvoiceSummary {
+  id: string;
+  invoiceCode: string;
+  branchId: string;
+  tableId: string;
+  finalAmount: number;
+}
+
+export async function closeReservationInvoicesInTx(
+  tx: Prisma.TransactionClient,
+  reservationId: string,
+  paymentMethod: string,
+  now: Date,
+  overrideFoodTotal?: number,
+): Promise<ClosedInvoiceSummary[]> {
+  if (!tx.invoice) return [];
+
+  const openInvoices = await tx.invoice.findMany({
+    where: {
+      reservationId,
+      status: { in: [InvoiceStatus.OPEN, InvoiceStatus.PAYMENT_PENDING] },
+    },
+    include: { batches: { include: { items: true } } },
+  });
+
+  const closedInvoices: ClosedInvoiceSummary[] = [];
+  for (const inv of openInvoices) {
+    const hasBatches = Array.isArray(inv.batches) && inv.batches.length > 0;
+    const nextStatus = hasBatches ? InvoiceStatus.PAID : InvoiceStatus.CANCELLED;
+    const liveFoodTotal =
+      overrideFoodTotal !== undefined
+        ? overrideFoodTotal
+        : hasBatches
+          ? computeBatchesFoodTotal(inv.batches)
+          : Number(inv.subtotal);
+    const finalAmt = Math.max(0, liveFoodTotal - Number(inv.discountAmount || 0));
+
+    const closedInv = await tx.invoice.update({
+      where: { id: inv.id },
+      data: {
+        status: nextStatus,
+        ...(hasBatches
+          ? {
+              subtotal: liveFoodTotal,
+              finalAmount: finalAmt,
+              paymentMethod,
+            }
+          : {}),
+        closedAt: now,
+      },
+    });
+    closedInvoices.push({
+      id: closedInv.id,
+      invoiceCode: closedInv.invoiceCode,
+      branchId: closedInv.branchId,
+      tableId: closedInv.tableId,
+      finalAmount: Number(closedInv.finalAmount),
+    });
+  }
+
+  return closedInvoices;
 }
 
 export function buildReservationInvoiceMailPayload(params: {

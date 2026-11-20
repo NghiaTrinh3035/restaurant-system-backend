@@ -128,6 +128,10 @@ export class EnvironmentVariables {
 
   @IsString({ message: 'SEPAY_API_URL bắt buộc và không được để trống' })
   SEPAY_API_URL: string;
+
+  @IsString()
+  @IsOptional()
+  CMD_NGROK?: string;
 }
 
 export function validate(config: Record<string, unknown>) {

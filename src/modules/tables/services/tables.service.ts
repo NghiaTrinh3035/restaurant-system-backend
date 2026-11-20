@@ -16,6 +16,7 @@ import { TablesGateway } from 'src/gateway/tables.gateway';
 import { TableLockService } from './table-lock.service';
 import {
   getLocalNow,
+  getReservationTableIds,
   timeStringToMinutes,
   toDateOnly,
 } from 'src/modules/reservations/helpers/reservation.helper';
@@ -28,7 +29,7 @@ import { QueryTableTypeDto } from '../dto/query-table-type.dto';
 import { QueryRestaurantTableDto } from '../dto/query-restaurant-table.dto';
 import { UpdateTableStatusDto } from '../dto/update-table-status.dto';
 import { BulkCleanTablesDto } from '../dto/bulk-clean-tables.dto';
-import { Prisma, ReservationStatus, RestaurantTableStatus, Role } from '@prisma/client';
+import { PaymentPurpose, PaymentStatus, Prisma, ReservationStatus, RestaurantTableStatus, Role } from '@prisma/client';
 import { PaginationMetaDto } from 'src/core/dto/api-response.dto';
 import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
 
@@ -74,6 +75,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       );
       if (!acquired) return;
       await this.checkAndAutoExpireSeatedTables();
+      await this.expireUnpaidReservations();
     } catch (err) {
       this.logger.warn(
         `Auto-expire seated tables failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -485,10 +487,11 @@ status: dto.status,
           branchId,
           reservationDate: toDateOnly(now.date),
           status: { in: [ReservationStatus.PENDING, ReservationStatus.CONFIRMED] },
-          tableId: { not: null },
+          OR: [{ tableId: { not: null } }, { reservationTables: { some: {} } }],
         },
         select: {
           tableId: true,
+          reservationTables: { select: { tableId: true } },
           reservationTime: true,
           customerName: true,
           guestCount: true,
@@ -504,14 +507,16 @@ status: dto.status,
       { reservationTime: string; customerName: string; guestCount: number }
     >();
     for (const res of todayReservations) {
-      if (!res.tableId) continue;
       const resMins = timeStringToMinutes(res.reservationTime);
-      if (resMins >= now.minutes && !nextReservationMap.has(res.tableId)) {
-        nextReservationMap.set(res.tableId, {
-          reservationTime: res.reservationTime,
-          customerName: res.customerName,
-          guestCount: res.guestCount,
-        });
+      if (resMins < now.minutes) continue;
+      for (const tableId of getReservationTableIds(res)) {
+        if (!nextReservationMap.has(tableId)) {
+          nextReservationMap.set(tableId, {
+            reservationTime: res.reservationTime,
+            customerName: res.customerName,
+            guestCount: res.guestCount,
+          });
+        }
       }
     }
 
@@ -622,11 +627,15 @@ status: dto.status,
         where: {
           reservationDate: today,
           status: { in: [ReservationStatus.PENDING, ReservationStatus.CONFIRMED] },
-          tableId: { in: tableIds },
+          OR: [
+            { tableId: { in: tableIds } },
+            { reservationTables: { some: { tableId: { in: tableIds } } } },
+          ],
         },
         select: {
           id: true,
           tableId: true,
+          reservationTables: { select: { tableId: true } },
           reservationTime: true,
           customerName: true,
           guestCount: true,
@@ -646,16 +655,18 @@ status: dto.status,
       { reservationTime: string; customerName: string; guestCount: number; status: string }
     >();
     for (const res of todayReservations) {
-      if (!res.tableId) continue;
       const resMins = timeStringToMinutes(res.reservationTime);
       // Đơn đặt trong ngày chưa qua quá 60 phút
-      if (resMins >= now.minutes - 60 && !nextReservationMap.has(res.tableId)) {
-        nextReservationMap.set(res.tableId, {
-          reservationTime: res.reservationTime,
-          customerName: res.customerName,
-          guestCount: res.guestCount,
-          status: res.status,
-        });
+      if (resMins < now.minutes - 60) continue;
+      for (const tableId of getReservationTableIds(res)) {
+        if (!nextReservationMap.has(tableId)) {
+          nextReservationMap.set(tableId, {
+            reservationTime: res.reservationTime,
+            customerName: res.customerName,
+            guestCount: res.guestCount,
+            status: res.status,
+          });
+        }
       }
     }
 
@@ -696,21 +707,28 @@ status: dto.status,
       where: {
         reservationDate: today,
         status: ReservationStatus.SEATED,
-        tableId: { not: null },
+        OR: [{ tableId: { not: null } }, { reservationTables: { some: {} } }],
       },
       include: {
         table: true,
+        reservationTables: { include: { table: true } },
       },
     });
 
     for (const res of seatedReservations) {
-      const { tableId, table } = res;
-      if (!tableId || !table) continue;
+      const targetTables = new Map<string, { id: string; tableNumber: string }>();
+      for (const rt of res.reservationTables) {
+        targetTables.set(rt.table.id, { id: rt.table.id, tableNumber: rt.table.tableNumber });
+      }
+      if (res.table) {
+        targetTables.set(res.table.id, { id: res.table.id, tableNumber: res.table.tableNumber });
+      }
+      const resTables = Array.from(targetTables.values());
+      if (resTables.length === 0) continue;
 
       const duration = res.slotDurationMinutes;
       if (duration <= 0) continue;
 
-      // Thời điểm bắt đầu ăn (minutes) theo múi giờ nhà hàng (Asia/Ho_Chi_Minh)
       let startMins = timeStringToMinutes(res.reservationTime);
       if (res.updatedAt) {
         const updatedLocal = getLocalNow(res.updatedAt);
@@ -723,8 +741,8 @@ status: dto.status,
 
       if (now.minutes >= expiredAtMins) {
         try {
+          const tableIds = resTables.map((t) => t.id);
           const updatedRes = await this.prisma.$transaction(async (tx) => {
-            // Chặn xử lý trùng khi nhiều luồng hoặc instance cùng quét một đơn SEATED
             const claim = await tx.reservation.updateMany({
               where: {
                 id: res.id,
@@ -734,8 +752,8 @@ status: dto.status,
             });
             if (claim.count === 0) return null;
 
-            await tx.restaurantTable.update({
-              where: { id: tableId },
+            await tx.restaurantTable.updateMany({
+              where: { id: { in: tableIds } },
               data: {
                 status: RestaurantTableStatus.DIRTY,
                 note: `Bữa ăn kết thúc tự động sau ${duration} phút (${res.reservationCode})`,
@@ -751,20 +769,22 @@ status: dto.status,
           if (!updatedRes) continue;
 
           const dirtySince = Date.now();
-          await this.redisClient.hset(
-            `table:dirty-times:${res.branchId}`,
-            tableId,
-            dirtySince.toString(),
-          );
-          await this.redisClient.hdel(`table:occupied-times:${res.branchId}`, tableId);
+          for (const tbl of resTables) {
+            await this.redisClient.hset(
+              `table:dirty-times:${res.branchId}`,
+              tbl.id,
+              dirtySince.toString(),
+            );
+            await this.redisClient.hdel(`table:occupied-times:${res.branchId}`, tbl.id);
 
-          this.tablesGateway?.notifyTableStatusChanged(res.branchId, {
-            id: tableId,
-            status: RestaurantTableStatus.DIRTY,
-            dirtySince,
-            tableNumber: table.tableNumber,
-            note: `Khách vừa dùng bữa xong (${res.reservationCode})`,
-          });
+            this.tablesGateway?.notifyTableStatusChanged(res.branchId, {
+              id: tbl.id,
+              status: RestaurantTableStatus.DIRTY,
+              dirtySince,
+              tableNumber: tbl.tableNumber,
+              note: `Khách vừa dùng bữa xong (${res.reservationCode})`,
+            });
+          }
           this.tablesGateway?.notifyReservationUpdated(res.branchId, updatedRes);
         } catch (err) {
           this.logger.warn(
@@ -773,6 +793,91 @@ status: dto.status,
         }
       }
     }
+  }
+
+  /**
+   * Hủy các giao dịch cọc và đơn AWAITING_PAYMENT quá hạn thanh toán (mặc định 15 phút), giải phóng khóa giữ bàn.
+   */
+  async expireUnpaidReservations(): Promise<void> {
+    const now = new Date();
+    const expiredPayments = await this.prisma.paymentTransaction.findMany({
+      where: {
+        status: PaymentStatus.PENDING,
+        purpose: PaymentPurpose.RESERVATION_DEPOSIT,
+        expiresAt: { lte: now },
+        reservationId: { not: null },
+      },
+      include: {
+        reservation: {
+          select: {
+            id: true,
+            branchId: true,
+            status: true,
+            tableId: true,
+            reservationDate: true,
+            reservationTime: true,
+            reservationTables: { select: { tableId: true } },
+          },
+        },
+      },
+    });
+
+    for (const payment of expiredPayments) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.paymentTransaction.updateMany({
+          where: { id: payment.id, status: PaymentStatus.PENDING },
+          data: { status: PaymentStatus.EXPIRED },
+        });
+        if (payment.reservationId) {
+          await tx.reservation.updateMany({
+            where: {
+              id: payment.reservationId,
+              status: ReservationStatus.AWAITING_PAYMENT,
+            },
+            data: {
+              status: ReservationStatus.CANCELLED,
+              cancelledReason: 'Quá thời gian thanh toán tiền cọc.',
+            },
+          });
+        }
+      });
+
+      if (payment.reservation && payment.reservation.status === ReservationStatus.AWAITING_PAYMENT) {
+        const tableIds = getReservationTableIds(payment.reservation);
+        if (tableIds.length > 0) {
+          const dateStr = payment.reservation.reservationDate.toISOString().slice(0, 10);
+          await this.tableLockService.releaseSlotLocksByIds(
+            payment.reservation.branchId,
+            tableIds,
+            dateStr,
+            payment.reservation.reservationTime,
+          );
+          try {
+            this.tablesGateway?.notifyTablesReleased({
+              branchId: payment.reservation.branchId,
+              tableIds,
+              date: dateStr,
+              time: payment.reservation.reservationTime,
+            });
+          } catch {
+            // Bỏ qua lỗi socket
+          }
+        }
+      }
+    }
+
+    // Dọn các đơn AWAITING_PAYMENT mồ côi quá 20 phút chưa gắn giao dịch đang chờ
+    const orphanCutoff = new Date(Date.now() - 20 * 60 * 1000);
+    await this.prisma.reservation.updateMany({
+      where: {
+        status: ReservationStatus.AWAITING_PAYMENT,
+        createdAt: { lte: orphanCutoff },
+      },
+      data: {
+        status: ReservationStatus.CANCELLED,
+        cancelledReason: 'Quá thời gian giữ chỗ chờ thanh toán.',
+      },
+    });
   }
 
   async bulkCleanTables(
