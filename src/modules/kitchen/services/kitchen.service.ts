@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { TablesGateway } from 'src/gateway/tables.gateway';
+import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
 import { PickupOrdersService } from 'src/modules/pickup-orders/services/pickup-orders.service';
 import {
   InvoiceStatus,
@@ -51,6 +52,7 @@ export class KitchenService {
     private readonly prisma: PrismaService,
     private readonly tablesGateway: TablesGateway,
     private readonly pickupOrdersService: PickupOrdersService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   /**
@@ -234,6 +236,31 @@ export class KitchenService {
       // Bỏ qua lỗi socket
     }
 
+    if (dto.status === KitchenItemStatus.READY) {
+      this.notificationsService
+        .onKitchenItemReady({
+          branchId: item.batch.branchId,
+          tableId: item.batch.tableId,
+          tableNumber: updated.batch.table.tableNumber,
+          itemName: updated.menuItem.name,
+        })
+        .catch((err) => {
+          this.logger.error('[Notification] Lỗi báo món READY cho staff:', err);
+        });
+    } else if (dto.status === KitchenItemStatus.CANCELLED) {
+      this.notificationsService
+        .onKitchenItemCancelled({
+          branchId: item.batch.branchId,
+          tableId: item.batch.tableId,
+          tableNumber: updated.batch.table.tableNumber,
+          itemName: updated.menuItem.name,
+          reason: dto.cancelledReason || 'Bếp hủy món',
+        })
+        .catch((err) => {
+          this.logger.error('[Notification] Lỗi báo bếp hủy món cho staff:', err);
+        });
+    }
+
     return updated;
   }
 
@@ -305,6 +332,19 @@ export class KitchenService {
       );
     } catch {
       // Bỏ qua lỗi socket
+    }
+
+    if (dto.status === KitchenItemStatus.READY) {
+      this.notificationsService
+        .onKitchenItemReady({
+          branchId: batch.branchId,
+          tableId: batch.tableId,
+          tableNumber: batch.table.tableNumber,
+          batchNumber: batch.batchNumber,
+        })
+        .catch((err) => {
+          this.logger.error('[Notification] Lỗi báo cả đợt món READY cho staff:', err);
+        });
     }
 
     return updatedBatch;

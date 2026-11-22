@@ -7,6 +7,7 @@ import {
   Prisma,
   ReservationStatus,
 } from '@prisma/client';
+import { buildReservationQrImageUrl } from './reservation-qr.helper';
 
 export const RESERVATION_PAYMENT_SUMMARY_SELECT = {
   id: true,
@@ -261,13 +262,16 @@ export function formatReservationTableNames(reservation: {
 }
 
 export function buildReservationConfirmedMailPayload(reservation: {
+  branchId?: string | null;
   customerName: string;
   reservationCode: string;
   reservationDate: Date | string;
   reservationTime: string;
   guestCount: number;
   specialNotes?: string | null;
+  qrImageUrl?: string | null;
   branch?: {
+    id?: string | null;
     name?: string | null;
     address?: string | null;
     streetAddress?: string | null;
@@ -286,10 +290,15 @@ export function buildReservationConfirmedMailPayload(reservation: {
       ? reservation.reservationDate.toISOString().slice(0, 10)
       : String(reservation.reservationDate).slice(0, 10);
   const { tableName, floor } = formatReservationTableNames(reservation);
+  const qrImageUrl =
+    reservation.qrImageUrl !== undefined
+      ? reservation.qrImageUrl
+      : buildReservationQrImageUrl({ reservationCode: reservation.reservationCode });
 
   return {
     customerName: reservation.customerName,
     reservationCode: reservation.reservationCode,
+    branchId: reservation.branchId || reservation.branch?.id || null,
     branchName: reservation.branch?.name || 'FoodHub Restaurant',
     branchAddress: reservation.branch?.address || reservation.branch?.streetAddress || null,
     branchPhone: reservation.branch?.phone || null,
@@ -299,6 +308,7 @@ export function buildReservationConfirmedMailPayload(reservation: {
     tableName,
     floor,
     specialNotes: reservation.specialNotes || null,
+    qrImageUrl,
     orders: (reservation.orders || []).map((o) => ({
       name: o.menuItem?.name || 'Món ăn',
       quantity: o.quantity,

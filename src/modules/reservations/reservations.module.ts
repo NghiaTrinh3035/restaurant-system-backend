@@ -8,10 +8,19 @@ import { TablesModule } from 'src/modules/tables/tables.module';
 import { GatewayModule } from 'src/gateway/gateway.module';
 import { MailModule } from 'src/mail/mail.module';
 import { DineInModule } from 'src/modules/dine-in/dine-in.module';
+import { NotificationsModule } from 'src/modules/notifications/notifications.module';
 import { PaymentsModule } from '../payments/payments.module';
 
 @Module({
-  imports: [PrismaModule, TablesModule, GatewayModule, MailModule, DineInModule, PaymentsModule],
+  imports: [
+    PrismaModule,
+    TablesModule,
+    GatewayModule,
+    MailModule,
+    DineInModule,
+    PaymentsModule,
+    NotificationsModule,
+  ],
   controllers: [ReservationsController],
   providers: [ReservationsService, ReservationAvailabilityService, ReservationBillingService],
   exports: [ReservationsService],

@@ -16,14 +16,37 @@ import {
   PickupOrderReadyEmailData,
 } from './templates/pickup-order-ready.template';
 import {
+  buildPickupOrderPreparingEmailTemplate,
+  PickupOrderPreparingEmailData,
+} from './templates/pickup-order-preparing.template';
+import {
+  buildPickupOrderReminderEmailTemplate,
+  PickupOrderReminderEmailData,
+} from './templates/pickup-order-reminder.template';
+import {
   buildReservationInvoiceEmailTemplate,
   ReservationInvoiceEmailData,
 } from './templates/reservation-invoice.template';
+import {
+  buildReservationReminderEmailTemplate,
+  ReservationReminderEmailData,
+} from './templates/reservation-reminder.template';
+import {
+  buildReservationQrImageUrl,
+  generateReservationQrPngBuffer,
+} from 'src/modules/reservations/helpers/reservation-qr.helper';
 
 export interface SendMailOptions {
   to: string;
   subject: string;
   html: string;
+  smtpHtml?: string;
+  attachments?: Array<{
+    filename: string;
+    content: Buffer;
+    cid?: string;
+    contentType?: string;
+  }>;
   type?: string;
   data?: Record<string, any>;
   senderName?: string;
@@ -72,7 +95,8 @@ export class MailService {
         from,
         to: options.to,
         subject: options.subject,
-        html: options.html,
+        html: options.smtpHtml || options.html,
+        ...(options.attachments ? { attachments: options.attachments } : {}),
       });
       this.logger.log(`[Development] Đã gửi email [${type}] thành công tới ${options.to} qua SMTP`);
     } catch (error: any) {
@@ -160,21 +184,91 @@ export class MailService {
   }
 
   /**
-   * Gửi email xác nhận đặt bàn khi nhân viên duyệt đơn (CONFIRMED).
+   * Gửi email xác nhận đặt bàn khi nhân viên duyệt đơn (CONFIRMED) kèm mã QR Check-in.
    */
   async sendReservationConfirmedEmail(
     to: string,
     data: ReservationConfirmedEmailData,
   ): Promise<void> {
+    const qrImageUrl =
+      data.qrImageUrl ||
+      buildReservationQrImageUrl({ reservationCode: data.reservationCode });
+    const enrichedData: ReservationConfirmedEmailData = {
+      ...data,
+      qrImageUrl,
+    };
     const subject = `🍽️ Xác nhận đặt bàn thành công [${data.reservationCode}] — FoodHub`;
-    const html = buildReservationConfirmedEmailTemplate(data);
+    const html = buildReservationConfirmedEmailTemplate(enrichedData);
+    const qrBuffer = await generateReservationQrPngBuffer({
+      reservationCode: data.reservationCode,
+      branchId: data.branchId || '',
+    }).catch(() => null);
 
     await this.sendMail({
       to,
       subject,
       html,
+      ...(qrBuffer && qrImageUrl
+        ? {
+            smtpHtml: html.replace(qrImageUrl, 'cid:reservation-qr'),
+            attachments: [
+              {
+                filename: `qr-checkin-${data.reservationCode}.png`,
+                content: qrBuffer,
+                cid: 'reservation-qr',
+                contentType: 'image/png',
+              },
+            ],
+          }
+        : {}),
       type: 'RESERVATION_CONFIRMED',
-      data: { reservationCode: data.reservationCode },
+      data: { reservationCode: data.reservationCode, qrImageUrl },
+    });
+  }
+
+  /**
+   * Gửi email nhắc nhở trước giờ hẹn dùng bữa tại nhà hàng kèm mã QR Check-in.
+   */
+  async sendReservationReminderEmail(
+    to: string,
+    data: ReservationReminderEmailData,
+  ): Promise<void> {
+    const qrImageUrl =
+      data.qrImageUrl ||
+      buildReservationQrImageUrl({ reservationCode: data.reservationCode });
+    const appPublicUrl =
+      data.appPublicUrl ?? this.configService.get<string>('APP_PUBLIC_URL') ?? null;
+    const enrichedData: ReservationReminderEmailData = {
+      ...data,
+      qrImageUrl,
+      appPublicUrl,
+    };
+    const subject = `⏰ Nhắc lịch hẹn dùng bữa lúc ${data.reservationTime} hôm nay [${data.reservationCode}] — FoodHub`;
+    const html = buildReservationReminderEmailTemplate(enrichedData);
+    const qrBuffer = await generateReservationQrPngBuffer({
+      reservationCode: data.reservationCode,
+      branchId: data.branchId || '',
+    }).catch(() => null);
+
+    await this.sendMail({
+      to,
+      subject,
+      html,
+      ...(qrBuffer && qrImageUrl
+        ? {
+            smtpHtml: html.replace(qrImageUrl, 'cid:reservation-qr'),
+            attachments: [
+              {
+                filename: `qr-checkin-${data.reservationCode}.png`,
+                content: qrBuffer,
+                cid: 'reservation-qr',
+                contentType: 'image/png',
+              },
+            ],
+          }
+        : {}),
+      type: 'RESERVATION_REMINDER',
+      data: { reservationCode: data.reservationCode, qrImageUrl },
     });
   }
 
@@ -193,6 +287,46 @@ export class MailService {
       subject,
       html,
       type: 'PICKUP_ORDER_INVOICE',
+      data: { orderCode: data.orderCode },
+    });
+  }
+
+  /**
+   * Gửi email thông báo bếp đang chế biến & sắp có món (PREPARING) cho đơn mang về.
+   */
+  async sendPickupOrderPreparingEmail(
+    to: string,
+    data: PickupOrderPreparingEmailData,
+  ): Promise<void> {
+    const subject = `👨‍🍳 Bếp đang chuẩn bị món cho đơn [${data.orderCode}] — FoodHub`;
+    const html = buildPickupOrderPreparingEmailTemplate(data);
+
+    await this.sendMail({
+      to,
+      subject,
+      html,
+      type: 'PICKUP_ORDER_PREPARING',
+      data: { orderCode: data.orderCode },
+    });
+  }
+
+  /**
+   * Gửi email nhắc nhở trước 30 phút giờ hẹn đến lấy đơn mang về.
+   */
+  async sendPickupOrderReminderEmail(
+    to: string,
+    data: PickupOrderReminderEmailData,
+  ): Promise<void> {
+    const appPublicUrl =
+      data.appPublicUrl ?? this.configService.get<string>('APP_PUBLIC_URL') ?? null;
+    const subject = `⏰ Sắp đến giờ nhận món lúc ${data.pickupTime} [${data.orderCode}] — FoodHub`;
+    const html = buildPickupOrderReminderEmailTemplate({ ...data, appPublicUrl });
+
+    await this.sendMail({
+      to,
+      subject,
+      html,
+      type: 'PICKUP_ORDER_REMINDER',
       data: { orderCode: data.orderCode },
     });
   }

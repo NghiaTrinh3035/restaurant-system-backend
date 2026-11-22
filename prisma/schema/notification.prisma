@@ -1,0 +1,66 @@
+enum NotificationType {
+  RESERVATION_CREATED
+  RESERVATION_CANCELLED_BY_CUSTOMER
+  RESERVATION_BOOKED
+  RESERVATION_CONFIRMED
+  RESERVATION_CANCELLED
+  RESERVATION_NO_SHOW
+  RESERVATION_REMINDER
+  RESERVATION_PREORDER_UPDATED
+  RESERVATION_DEPOSIT_EXPIRED
+  RESERVATION_AUTO_COMPLETED
+
+  PICKUP_ORDER_CREATED
+  PICKUP_ORDER_CONFIRMED
+  PICKUP_ORDER_PREPARING
+  PICKUP_ORDER_READY
+  PICKUP_ORDER_COMPLETED
+  PICKUP_ORDER_CANCELLED
+  PICKUP_ORDER_CANCELLED_BY_CUSTOMER
+  PICKUP_ORDER_REMINDER
+  PICKUP_ORDER_OVERDUE
+
+  KITCHEN_NEW_BATCH
+  KITCHEN_NEW_PICKUP
+  KITCHEN_ITEM_READY
+  KITCHEN_ITEM_CANCELLED
+
+  TABLE_PAYMENT_REQUESTED
+  TABLE_DIRTY_OVERDUE
+
+  PAYMENT_FAILED
+  PAYMENT_REFUNDED
+
+  AUTH_WELCOME
+  AUTH_DAILY_LOGIN
+  AUTH_NEW_DEVICE_LOGIN
+  AUTH_PASSWORD_CHANGED
+  AUTH_SESSIONS_REVOKED
+
+  STAFF_ACCOUNT_CREATED
+  STAFF_ACCOUNT_LOCKED
+  STAFF_ACCOUNT_UNLOCKED
+  STAFF_BRANCH_TRANSFERRED
+  STAFF_PASSWORD_RESET
+  ADMIN_SYSTEM_ALERT
+}
+
+model Notification {
+  id        String           @id @default(uuid()) @db.Uuid
+  userId    String           @db.Uuid
+  branchId  String?          @db.Uuid
+  type      NotificationType
+  category  String           @default("RESERVATION")
+  title     String
+  body      String
+  link      String?
+  data      Json?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@index([userId, category, createdAt])
+  @@map("notifications")
+}

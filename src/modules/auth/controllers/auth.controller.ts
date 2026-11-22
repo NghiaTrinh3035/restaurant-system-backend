@@ -52,9 +52,20 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async login(
     @Body() body: LoginDto,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response
   ) {
-    const result = await this.authService.login(body);
+    const forwardedFor = req.headers['x-forwarded-for'];
+    const clientIp =
+      typeof forwardedFor === 'string'
+        ? forwardedFor.split(',')[0].trim()
+        : Array.isArray(forwardedFor)
+          ? forwardedFor[0]
+          : req.ip;
+    const userAgent =
+      typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : undefined;
+
+    const result = await this.authService.login(body, { ip: clientIp, userAgent });
     this.authCookieService.setAuthCookies(res, result.accessToken, result.refreshToken);
     return { user: result.user };
   }

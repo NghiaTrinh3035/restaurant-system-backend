@@ -8,9 +8,10 @@ model User {
   phone         String?
   gender        Gender?
   avatar        String?
-  role          Role           @default(USER)
-  isActive      Boolean        @default(true)
-  createdAt     DateTime       @default(now())
+  role                    Role           @default(USER)
+  isActive                Boolean        @default(true)
+  notificationPreferences Json?
+  createdAt               DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
   branchId      String?        @db.Uuid
@@ -21,6 +22,7 @@ model User {
   pickupOrders  PickupOrder[]
   invoices      Invoice[]
   payments      PaymentTransaction[]
+  notifications Notification[]
 
   @@index([branchId, isActive])
   @@index([role, isActive])

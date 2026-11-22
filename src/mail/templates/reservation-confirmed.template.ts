@@ -1,6 +1,7 @@
 export interface ReservationConfirmedEmailData {
   customerName: string;
   reservationCode: string;
+  branchId?: string | null;
   branchName: string;
   branchAddress?: string | null;
   branchPhone?: string | null;
@@ -10,6 +11,7 @@ export interface ReservationConfirmedEmailData {
   tableName?: string | null;
   floor?: number | null;
   specialNotes?: string | null;
+  qrImageUrl?: string | null;
   orders?: Array<{
     name: string;
     quantity: number;
@@ -107,13 +109,22 @@ export function buildReservationConfirmedEmailTemplate(data: ReservationConfirme
           Yêu cầu đặt bàn của quý khách đã được nhân viên nhà hàng <strong>xác nhận thành công</strong>. Dưới đây là thông tin chi tiết về lịch hẹn:
         </p>
 
-        <!-- CODE BOX -->
-        <div style="background-color: #fff7ed; border: 2px dashed #fdba74; border-radius: 12px; padding: 18px 24px; text-align: center; margin-bottom: 24px;">
-          <span style="font-size: 12px; text-transform: uppercase; color: #c2410c; font-weight: 700; letter-spacing: 1px;">Mã đặt bàn của quý khách</span>
+        <!-- CODE & QR BOX -->
+        <div style="background-color: #fff7ed; border: 2px dashed #fdba74; border-radius: 12px; padding: 20px 24px; text-align: center; margin-bottom: 24px;">
+          <span style="font-size: 12px; text-transform: uppercase; color: #c2410c; font-weight: 700; letter-spacing: 1px;">Mã đặt bàn & QR Check-in của quý khách</span>
           <div style="font-size: 26px; font-weight: 900; color: #ea580c; font-family: monospace; letter-spacing: 2px; margin-top: 4px;">
             ${data.reservationCode}
           </div>
-          <p style="margin: 4px 0 0; font-size: 12px; color: #7c2d12;">Vui lòng cung cấp mã này khi tới quầy lễ tân chi nhánh</p>
+          ${
+            data.qrImageUrl
+              ? `
+          <div style="margin: 16px auto 10px; display: inline-block; background-color: #ffffff; padding: 12px; border-radius: 12px; border: 1px solid #fed7aa; box-shadow: 0 2px 8px rgba(234, 88, 12, 0.08);">
+            <img src="${data.qrImageUrl}" alt="Mã QR Check-in ${data.reservationCode}" width="180" height="180" style="display: block; width: 180px; height: 180px; border: 0;" />
+          </div>
+          `
+              : ''
+          }
+          <p style="margin: 4px 0 0; font-size: 12px; color: #7c2d12;">Vui lòng đưa mã QR hoặc mã đặt bàn này cho nhân viên lễ tân khi tới chi nhánh để nhận bàn nhanh chóng</p>
         </div>
 
         <!-- DETAILS TABLE -->

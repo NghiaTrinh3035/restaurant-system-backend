@@ -38,11 +38,16 @@ import { ReservationAvailabilityService } from './reservation-availability.servi
 
 import { MailService } from 'src/mail/mail.service';
 import { DineInService } from 'src/modules/dine-in/services/dine-in.service';
+import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
 import { Logger } from '@nestjs/common';
 import {
   RESERVATION_LIST_INCLUDE,
   buildReservationConfirmedMailPayload,
 } from '../helpers/reservation-bill.helper';
+import {
+  generateReservationQrPngBuffer,
+  verifyReservationQrSignature,
+} from '../helpers/reservation-qr.helper';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -75,6 +80,7 @@ export class ReservationsService {
     private readonly mailService: MailService,
     private readonly dineInService: DineInService,
     private readonly paymentsService: PaymentsService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async createReservation(
@@ -336,6 +342,13 @@ export class ReservationsService {
       // Bỏ qua lỗi socket nếu có
     }
 
+    this.notificationsService.onReservationCreated(created).catch((err) => {
+      this.logger.error(
+        `[Notification] Gửi cảnh báo đặt bàn mới cho nhân viên thất bại (${created.reservationCode}):`,
+        err,
+      );
+    });
+
     return created;
   }
 
@@ -570,6 +583,26 @@ export class ReservationsService {
       // Bỏ qua lỗi socket nếu có
     }
 
+    if (isCustomer) {
+      this.notificationsService
+        .onReservationCancelledByCustomer(updated, refundReason)
+        .catch((err) => {
+          this.logger.error(
+            `[Notification] Gửi cảnh báo khách hủy đặt bàn cho nhân viên thất bại (${updated.reservationCode}):`,
+            err,
+          );
+        });
+    } else {
+      this.notificationsService
+        .onReservationCancelledByStaff(updated, refundReason)
+        .catch((err) => {
+          this.logger.error(
+            `[Notification] Gửi thông báo nhà hàng hủy đặt bàn cho khách thất bại (${updated.reservationCode}):`,
+            err,
+          );
+        });
+    }
+
     return updated;
   }
 
@@ -648,6 +681,11 @@ export class ReservationsService {
       });
       if (fullUpdated) {
         this.tablesGateway.notifyReservationUpdated(reservation.branchId, fullUpdated);
+        if (!user || user.role === Role.USER) {
+          this.notificationsService
+            .onReservationPreOrderUpdated(fullUpdated, lines.length)
+            .catch(() => {});
+        }
       }
     } catch {
       // Bỏ qua lỗi socket nếu có
@@ -733,8 +771,18 @@ export class ReservationsService {
     }
 
     if (dto.status === ReservationStatus.CONFIRMED) {
+      this.notificationsService.onReservationConfirmed(updated).catch((err) => {
+        this.logger.error(
+          `[Notification] Gửi thông báo xác nhận đặt bàn cho khách thất bại (${updated.reservationCode}):`,
+          err,
+        );
+      });
+
       const recipientEmail = updated.customerEmail || updated.user?.email;
-      if (recipientEmail) {
+      const emailAllowed = recipientEmail
+        ? await this.notificationsService.isEmailCategoryEnabled(updated.userId, 'reservation')
+        : false;
+      if (recipientEmail && emailAllowed) {
         this.mailService
           .sendReservationConfirmedEmail(
             recipientEmail,
@@ -744,6 +792,26 @@ export class ReservationsService {
             this.logger.error(`[Mail] Gửi email xác nhận đặt bàn thất bại cho ${recipientEmail}:`, err);
           });
       }
+    }
+
+    if (dto.status === ReservationStatus.CANCELLED) {
+      this.notificationsService
+        .onReservationCancelledByStaff(updated, dto.note || 'Nhà hàng hủy đặt bàn')
+        .catch((err) => {
+          this.logger.error(
+            `[Notification] Gửi thông báo hủy đặt bàn cho khách thất bại (${updated.reservationCode}):`,
+            err,
+          );
+        });
+    }
+
+    if (dto.status === ReservationStatus.NO_SHOW) {
+      this.notificationsService.onReservationNoShow(updated).catch((err) => {
+        this.logger.error(
+          `[Notification] Gửi thông báo vắng mặt cho khách thất bại (${updated.reservationCode}):`,
+          err,
+        );
+      });
     }
 
     if (dto.status === ReservationStatus.SEATED && targetTableIds.length > 0) {
@@ -829,5 +897,30 @@ export class ReservationsService {
       { status: ReservationStatus.SEATED, note: 'Khách đã quét mã QR check-in tại quầy' },
       user,
     );
+  }
+
+  /**
+   * Trả về ảnh PNG mã QR Check-in của đơn đặt bàn sau khi kiểm tra chữ ký HMAC hợp lệ.
+   */
+  async getReservationQrPng(reservationCode: string, sig?: string): Promise<Buffer> {
+    const secret =
+      process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || 'foodhub-qr-secret';
+    if (!verifyReservationQrSignature(reservationCode, sig, secret)) {
+      throw new ForbiddenException('Chữ ký mã QR không hợp lệ.');
+    }
+
+    const reservation = await this.prisma.reservation.findUnique({
+      where: { reservationCode },
+      select: { reservationCode: true, branchId: true },
+    });
+
+    if (!reservation) {
+      throw new NotFoundException('Không tìm thấy thông tin đặt bàn.');
+    }
+
+    return generateReservationQrPngBuffer({
+      reservationCode: reservation.reservationCode,
+      branchId: reservation.branchId,
+    });
   }
 }

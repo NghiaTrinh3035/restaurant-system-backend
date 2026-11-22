@@ -13,6 +13,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { REDIS_CLIENT } from 'src/redis/redis.module';
 import Redis from 'ioredis';
 import { TablesGateway } from 'src/gateway/tables.gateway';
+import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
 import { TableLockService } from './table-lock.service';
 import {
   getLocalNow,
@@ -50,6 +51,8 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
     private readonly tablesGateway: TablesGateway,
     @Inject(forwardRef(() => TableLockService))
     private readonly tableLockService: TableLockService,
+    @Inject(forwardRef(() => NotificationsService))
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   onModuleInit() {
@@ -76,6 +79,7 @@ export class TablesService implements OnModuleInit, OnModuleDestroy {
       if (!acquired) return;
       await this.checkAndAutoExpireSeatedTables();
       await this.expireUnpaidReservations();
+      await this.checkDirtyTableOverdues();
     } catch (err) {
       this.logger.warn(
         `Auto-expire seated tables failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -434,8 +438,10 @@ status: dto.status,
     if (dto.status === RestaurantTableStatus.DIRTY) {
       dirtySince = Date.now();
       await this.redisClient.hset(`table:dirty-times:${table.branchId}`, table.id, dirtySince.toString());
+      await this.redisClient.srem(`table:dirty-alerted:${table.branchId}`, table.id);
     } else {
       await this.redisClient.hdel(`table:dirty-times:${table.branchId}`, table.id);
+      await this.redisClient.srem(`table:dirty-alerted:${table.branchId}`, table.id);
     }
 
     if (dto.status === RestaurantTableStatus.OCCUPIED) {
@@ -786,6 +792,11 @@ status: dto.status,
             });
           }
           this.tablesGateway?.notifyReservationUpdated(res.branchId, updatedRes);
+          this.notificationsService.onReservationAutoCompleted(updatedRes).catch((err) => {
+            this.logger.warn(
+              `[Notification] Gửi thông báo tự động kết thúc bữa ăn thất bại (${res.reservationCode}): ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
         } catch (err) {
           this.logger.warn(
             `Failed to auto-expire reservation ${res.reservationCode}: ${err instanceof Error ? err.message : String(err)}`,
@@ -811,6 +822,8 @@ status: dto.status,
         reservation: {
           select: {
             id: true,
+            reservationCode: true,
+            userId: true,
             branchId: true,
             status: true,
             tableId: true,
@@ -863,6 +876,17 @@ status: dto.status,
             // Bỏ qua lỗi socket
           }
         }
+
+        if (payment.reservation.userId) {
+          this.notificationsService
+            .onReservationDepositExpired({
+              userId: payment.reservation.userId,
+              reservationId: payment.reservation.id,
+              reservationCode: payment.reservation.reservationCode,
+              branchId: payment.reservation.branchId,
+            })
+            .catch(() => {});
+        }
       }
     }
 
@@ -878,6 +902,57 @@ status: dto.status,
         cancelledReason: 'Quá thời gian giữ chỗ chờ thanh toán.',
       },
     });
+  }
+
+  /**
+   * Cảnh báo cho Staff khi bàn ở trạng thái DIRTY (Cần dọn dẹp) quá lâu (mặc định 15 phút).
+   */
+  async checkDirtyTableOverdues(): Promise<void> {
+    const thresholdMinutes = Number(process.env.TABLE_DIRTY_ALERT_MINUTES) || 15;
+    const thresholdMs = thresholdMinutes * 60 * 1000;
+    const nowMs = Date.now();
+
+    const dirtyTables = await this.prisma.restaurantTable.findMany({
+      where: {
+        status: RestaurantTableStatus.DIRTY,
+        isActive: true,
+      },
+      select: {
+        id: true,
+        branchId: true,
+        tableNumber: true,
+      },
+    });
+
+    if (dirtyTables.length === 0) return;
+
+    const branchIds = Array.from(new Set(dirtyTables.map((t) => t.branchId)));
+    for (const branchId of branchIds) {
+      const dirtyMap = await this.redisClient.hgetall(`table:dirty-times:${branchId}`);
+      const alertedSet = await this.redisClient.smembers(`table:dirty-alerted:${branchId}`);
+      const alerted = new Set(alertedSet);
+
+      const branchDirtyTables = dirtyTables.filter((t) => t.branchId === branchId);
+      for (const tbl of branchDirtyTables) {
+        if (alerted.has(tbl.id)) continue;
+        const sinceRaw = dirtyMap[tbl.id];
+        const sinceMs = sinceRaw ? Number(sinceRaw) : 0;
+        if (!sinceMs || nowMs - sinceMs < thresholdMs) continue;
+
+        const added = await this.redisClient.sadd(`table:dirty-alerted:${branchId}`, tbl.id);
+        await this.redisClient.expire(`table:dirty-alerted:${branchId}`, 86400);
+        if (added === 1) {
+          this.notificationsService
+            .onTableDirtyOverdue({
+              branchId,
+              tableId: tbl.id,
+              tableNumber: tbl.tableNumber,
+              minutesDirty: Math.floor((nowMs - sinceMs) / 60000),
+            })
+            .catch(() => {});
+        }
+      }
+    }
   }
 
   async bulkCleanTables(
@@ -927,6 +1002,7 @@ status: dto.status,
 
     if (targetIds.length > 0) {
       await this.redisClient.hdel(`table:dirty-times:${branchId}`, ...targetIds);
+      await this.redisClient.srem(`table:dirty-alerted:${branchId}`, ...targetIds);
     }
 
     try {

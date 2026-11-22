@@ -15,6 +15,7 @@ model Reservation {
   specialNotes        String?
   status              ReservationStatus  @default(PENDING)
   cancelledReason     String?
+  reminderSentAt      DateTime?
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
 

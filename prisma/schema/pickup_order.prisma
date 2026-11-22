@@ -10,9 +10,11 @@ model PickupOrder {
   pickupTime      String            // Định dạng "HH:mm", vd: "11:30", "18:00"
   totalAmount     Decimal           @db.Decimal(12, 2)
   specialNotes    String?
-  status          PickupOrderStatus @default(PENDING)
-  cancelledReason String?
-  createdAt       DateTime          @default(now())
+  status            PickupOrderStatus @default(PENDING)
+  cancelledReason   String?
+  reminderSentAt    DateTime?
+  overdueNotifiedAt DateTime?
+  createdAt         DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 
   branch          RestaurantBranch  @relation(fields: [branchId], references: [id], onDelete: Cascade)

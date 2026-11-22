@@ -21,6 +21,7 @@ import type Redis from 'ioredis';
 import type { ICurrentUser } from 'src/core/common/interfaces/current-user.interface';
 import { TablesGateway } from 'src/gateway/tables.gateway';
 import { MailService } from 'src/mail/mail.service';
+import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { REDIS_CLIENT } from 'src/redis/redis.module';
 import {
@@ -71,6 +72,7 @@ export class PaymentsService {
     private readonly sepayGateway: SepayGatewayService,
     private readonly tablesGateway: TablesGateway,
     private readonly mailService: MailService,
+    private readonly notificationsService: NotificationsService,
     @Inject(forwardRef(() => TableLockService))
     private readonly tableLockService: TableLockService,
   ) {}
@@ -431,6 +433,24 @@ export class PaymentsService {
       }
     }
 
+    if (updated > 0 && ownerId) {
+      this.notificationsService
+        .onPaymentFailed({
+          userId: ownerId,
+          branchId,
+          transactionCode: txRecord.transactionCode,
+          amount: Number(txRecord.amount),
+          targetCode:
+            txRecord.purpose === PaymentPurpose.PICKUP_ORDER
+              ? txRecord.pickupOrderId
+              : txRecord.reservationId,
+          targetType:
+            txRecord.purpose === PaymentPurpose.PICKUP_ORDER ? 'PICKUP' : 'RESERVATION',
+          reason: 'Bạn đã hủy giao dịch thanh toán.',
+        })
+        .catch(() => {});
+    }
+
     return this.fetchTransactionDetails(transactionCode);
   }
 
@@ -510,6 +530,48 @@ export class PaymentsService {
         refundReason: reason,
       },
     });
+
+    if (result.count > 0) {
+      void (async () => {
+        try {
+          const refundedTx = await this.prisma.paymentTransaction.findFirst({
+            where: {
+              status: PaymentStatus.REFUNDED,
+              ...(target.pickupOrderId ? { pickupOrderId: target.pickupOrderId } : {}),
+              ...(target.reservationId ? { reservationId: target.reservationId } : {}),
+            },
+            orderBy: { refundedAt: 'desc' },
+            include: {
+              pickupOrder: { select: { orderCode: true, branchId: true, userId: true } },
+              reservation: { select: { reservationCode: true, branchId: true, userId: true } },
+            },
+          });
+          if (refundedTx) {
+            const targetUserId =
+              refundedTx.pickupOrder?.userId ??
+              refundedTx.reservation?.userId ??
+              refundedTx.userId;
+            if (targetUserId) {
+              await this.notificationsService.onPaymentRefunded({
+                userId: targetUserId,
+                branchId:
+                  refundedTx.pickupOrder?.branchId ?? refundedTx.reservation?.branchId,
+                amount: Number(refundedTx.amount),
+                targetCode:
+                  refundedTx.pickupOrder?.orderCode ??
+                  refundedTx.reservation?.reservationCode ??
+                  null,
+                targetType: target.pickupOrderId ? 'PICKUP' : 'RESERVATION',
+                reason,
+              });
+            }
+          }
+        } catch {
+          // Bỏ qua lỗi gửi thông báo hoàn tiền
+        }
+      })();
+    }
+
     return result.count;
   }
 
@@ -526,10 +588,13 @@ export class PaymentsService {
       const txRecord = await this.prisma.paymentTransaction.findUnique({
         where: { transactionCode: input.transactionCode },
         include: {
-          pickupOrder: { select: { id: true, branchId: true, status: true, userId: true } },
+          pickupOrder: {
+            select: { id: true, orderCode: true, branchId: true, status: true, userId: true },
+          },
           reservation: {
             select: {
               id: true,
+              reservationCode: true,
               branchId: true,
               status: true,
               tableId: true,
@@ -710,6 +775,43 @@ export class PaymentsService {
               userId: txRecord.pickupOrder?.userId ?? null,
               status: PickupOrderStatus.CONFIRMED,
             } as { branchId: string; userId?: string | null });
+
+            this.prisma.pickupOrder
+              .findUnique({
+                where: { id: txRecord.pickupOrderId },
+                include: {
+                  branch: { select: { id: true, name: true } },
+                  items: { include: { menuItem: true } },
+                },
+              })
+              .then((fullPickup) => {
+                if (!fullPickup) return;
+                return Promise.allSettled([
+                  this.notificationsService.onPickupOrderCreated(fullPickup),
+                  this.notificationsService.onPickupOrderStatusChanged(fullPickup, 'PENDING'),
+                ]);
+              })
+              .catch(() => {});
+          }
+
+          if (!input.isSuccess) {
+            const failedUserId =
+              txRecord.pickupOrder?.userId ?? txRecord.reservation?.userId ?? txRecord.userId;
+            if (failedUserId) {
+              this.notificationsService
+                .onPaymentFailed({
+                  userId: failedUserId,
+                  branchId,
+                  transactionCode: txRecord.transactionCode,
+                  amount: Number(txRecord.amount),
+                  targetCode:
+                    txRecord.pickupOrder?.orderCode ??
+                    txRecord.reservation?.reservationCode ??
+                    null,
+                  targetType: txRecord.pickupOrderId ? 'PICKUP' : 'RESERVATION',
+                })
+                .catch(() => {});
+            }
           }
 
           if (
@@ -771,9 +873,22 @@ export class PaymentsService {
               if (confirmedRes) {
                 if (wasAwaitingPayment) {
                   this.tablesGateway.notifyReservationCreated(branchId, confirmedRes);
+                  this.notificationsService.onReservationCreated(confirmedRes).catch((err) => {
+                    this.logger.error(
+                      `[Notification] Gửi cảnh báo đặt bàn có cọc cho nhân viên thất bại (${confirmedRes.reservationCode}):`,
+                      err,
+                    );
+                  });
                 } else {
                   this.tablesGateway.notifyReservationUpdated?.(branchId, confirmedRes);
                 }
+
+                this.notificationsService.onReservationConfirmed(confirmedRes).catch((err) => {
+                  this.logger.error(
+                    `[Notification] Gửi thông báo xác nhận đặt bàn cho khách thất bại (${confirmedRes.reservationCode}):`,
+                    err,
+                  );
+                });
 
                 const recipientEmail = confirmedRes.customerEmail || confirmedRes.user?.email;
                 if (recipientEmail) {

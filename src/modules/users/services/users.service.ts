@@ -6,12 +6,16 @@ import { UpdateStaffDto } from '../dto/update-staff.dto';
 import { QueryStaffDto } from '../dto/query-staff.dto';
 import { ResetStaffPasswordDto } from '../dto/reset-staff-password.dto';
 import { CustomException } from 'src/core/exceptions/custom.exception';
+import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
 import { Prisma, Role } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificationsService: NotificationsService,
+  ) { }
 
   async me(userId: string) {
     const user = await this.prisma.user.findUnique({
@@ -182,7 +186,7 @@ export class UsersService {
     const passwordHash = await bcrypt.hash(data.password, salt);
 
     // 4. Tạo User role STAFF
-    return await this.prisma.user.create({
+    const createdStaff = await this.prisma.user.create({
       data: {
         fullName: data.fullName.trim(),
         email: normalizedEmail,
@@ -207,6 +211,18 @@ export class UsersService {
         passwordHash: true,
       },
     });
+
+    this.notificationsService
+      .onStaffCreated({
+        id: createdStaff.id,
+        fullName: createdStaff.fullName,
+        email: createdStaff.email,
+        branchId: branch.id,
+        branchName: branch.name,
+      })
+      .catch(() => {});
+
+    return createdStaff;
   }
 
   /**
@@ -214,7 +230,7 @@ export class UsersService {
    */
   async updateStaff(id: string, data: UpdateStaffDto) {
     // 1. Kiểm tra nhân viên tồn tại
-    await this.getStaffById(id);
+    const existingStaff = await this.getStaffById(id);
 
     // 2. Nếu có thay đổi chi nhánh, kiểm tra chi nhánh mới có tồn tại không
     if (data.branchId) {
@@ -226,7 +242,7 @@ export class UsersService {
       }
     }
 
-    return await this.prisma.user.update({
+    const updatedStaff = await this.prisma.user.update({
       where: { id },
       data: {
         ...(data.fullName !== undefined && { fullName: data.fullName.trim() }),
@@ -249,6 +265,23 @@ export class UsersService {
         passwordHash: true,
       },
     });
+
+    if (
+      data.branchId &&
+      data.branchId !== existingStaff.branchId &&
+      updatedStaff.branch
+    ) {
+      this.notificationsService
+        .onStaffBranchTransferred({
+          id: updatedStaff.id,
+          fullName: updatedStaff.fullName,
+          branchId: updatedStaff.branch.id,
+          branchName: updatedStaff.branch.name,
+        })
+        .catch(() => {});
+    }
+
+    return updatedStaff;
   }
 
   /**
@@ -284,6 +317,15 @@ export class UsersService {
       });
     }
 
+    this.notificationsService
+      .onStaffStatusToggled({
+        id: updated.id,
+        fullName: updated.fullName,
+        isActive: updated.isActive,
+        branchId: updated.branchId,
+      })
+      .catch(() => {});
+
     return updated;
   }
 
@@ -305,6 +347,8 @@ export class UsersService {
     await this.prisma.refreshToken.deleteMany({
       where: { userId: id },
     });
+
+    this.notificationsService.onStaffPasswordReset(id).catch(() => {});
 
     return { success: true, message: 'Đặt lại mật khẩu cho nhân viên thành công' };
   }

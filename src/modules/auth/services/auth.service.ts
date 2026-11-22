@@ -14,6 +14,7 @@ import { PasswordService } from 'src/core/security/password/password.service';
 import { AuthJwtService } from 'src/core/security/jwt/auth-jwt.service';
 import { OtpService } from './otp.service';
 import { MailService } from 'src/mail/mail.service';
+import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
 import { OtpType } from '../enums/otp-type.enum';
 import {
   EmailAlreadyExistsException,
@@ -34,6 +35,7 @@ export class AuthService {
     private readonly otpService: OtpService,
     private readonly mailService: MailService,
     private readonly configService: ConfigService,
+    private readonly notificationsService: NotificationsService,
   ) { }
 
   /**
@@ -125,6 +127,15 @@ export class AuthService {
 
     await this.saveRefreshToken(newUser.id.toString(), refreshToken);
 
+    try {
+      await this.notificationsService.onUserRegistered({
+        id: newUser.id,
+        fullName: newUser.fullName,
+      });
+    } catch {
+      // Bỏ qua lỗi thông báo
+    }
+
     const { passwordHash, ...safeUser } = newUser;
 
     return {
@@ -137,7 +148,10 @@ export class AuthService {
   /**
    * Login với email + password.
    */
-  async login(data: LoginDto): Promise<IAuthResult> {
+  async login(
+    data: LoginDto,
+    meta?: { ip?: string; userAgent?: string },
+  ): Promise<IAuthResult> {
     const email = data.email.trim().toLowerCase();
     const user = await this.prisma.user.findUnique({
       where: { email },
@@ -178,6 +192,16 @@ export class AuthService {
     const refreshToken = this.jwtService.generateRefreshToken(payload);
 
     await this.saveRefreshToken(user.id.toString(), refreshToken);
+
+    try {
+      await this.notificationsService.onUserLogin({
+        user: { id: user.id, fullName: user.fullName, role: user.role },
+        ip: meta?.ip,
+        userAgent: meta?.userAgent,
+      });
+    } catch {
+      // Bỏ qua lỗi thông báo
+    }
 
     const { passwordHash, ...safeUser } = user;
 
@@ -227,6 +251,11 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (user) {
       await this.revokeAllUserTokens(user.id.toString());
+      try {
+        await this.notificationsService.onPasswordChanged(user.id);
+      } catch {
+        // Bỏ qua lỗi thông báo
+      }
     }
 
     return new ApiResponseDto(true, 'Đặt lại mật khẩu thành công.', null);
@@ -253,7 +282,9 @@ export class AuthService {
       throw new UnauthorizedException('Tài khoản của bạn đã bị khóa hoặc ngừng hoạt động. Vui lòng liên hệ quản trị viên.');
     }
 
+    let isNewGoogleUser = false;
     if (!user) {
+      isNewGoogleUser = true;
       const nameCandidate = [firstName, lastName].filter(Boolean).join(' ').trim();
       const resolvedFullName = nameCandidate.length > 0 ? nameCandidate : normalizedEmail.split('@')[0];
 
@@ -286,6 +317,27 @@ export class AuthService {
     const refreshToken = this.jwtService.generateRefreshToken(payload);
 
     await this.saveRefreshToken(user.id.toString(), refreshToken);
+
+    try {
+      const forwardedFor = req?.headers?.['x-forwarded-for'];
+      const clientIp =
+        typeof forwardedFor === 'string'
+          ? forwardedFor.split(',')[0].trim()
+          : Array.isArray(forwardedFor)
+            ? forwardedFor[0]
+            : req?.ip;
+      const userAgent =
+        typeof req?.headers?.['user-agent'] === 'string' ? req.headers['user-agent'] : undefined;
+
+      await this.notificationsService.onUserLogin({
+        user: { id: user.id, fullName: user.fullName, role: user.role },
+        ip: clientIp,
+        userAgent,
+        isNewGoogleUser,
+      });
+    } catch {
+      // Bỏ qua lỗi thông báo
+    }
 
     const { passwordHash, ...safeUser } = user;
 
@@ -336,6 +388,7 @@ export class AuthService {
       if (storedToken.revoked) {
         // Phát hiện token đã bị thu hồi mà còn dùng lại -> Rủi ro, thu hồi tất cả
         await this.revokeAllUserTokens(payload.sub);
+        this.notificationsService.onSessionsRevoked(payload.sub).catch(() => {});
         throw new UnauthorizedException('Refresh token has been revoked. All sessions terminated.');
       }
 

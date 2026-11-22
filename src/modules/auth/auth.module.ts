@@ -7,6 +7,7 @@ import { PasswordService } from 'src/core/security/password/password.service';
 import { MailModule } from 'src/mail/mail.module';
 import { AuthJwtModule } from 'src/core/security/jwt/jwt.module';
 import { GoogleStrategy } from 'src/core/security/google/google.strategy';
+import { NotificationsModule } from 'src/modules/notifications/notifications.module';
 
 import { AuthCookieService } from './services/auth-cookie.service';
 
@@ -14,7 +15,8 @@ import { AuthCookieService } from './services/auth-cookie.service';
   imports: [
     ConfigModule,
     MailModule,
-    AuthJwtModule
+    AuthJwtModule,
+    NotificationsModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, OtpService, PasswordService, GoogleStrategy, AuthCookieService],
