@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { TablesGateway } from 'src/gateway/tables.gateway';
+import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
 import {
   InvoiceStatus,
   KitchenItemStatus,
@@ -66,6 +67,7 @@ export class DineInService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tablesGateway: TablesGateway,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   private async findActiveInvoiceByTable(tableId: string) {
@@ -406,6 +408,21 @@ export class DineInService {
       // Bỏ qua lỗi socket
     }
 
+    if (result.batch) {
+      this.notificationsService
+        .onKitchenNewBatch({
+          branchId: table.branchId,
+          tableId: table.id,
+          tableNumber: table.tableNumber,
+          batchNumber: result.batch.batchNumber,
+          itemCount: result.batch.items?.length || 0,
+          invoiceCode: invoice.invoiceCode,
+        })
+        .catch((err) => {
+          this.logger.error('[Notification] Lỗi báo đợt gọi món mới cho bếp:', err);
+        });
+    }
+
     return result;
   }
 
@@ -454,6 +471,19 @@ export class DineInService {
     } catch {
       // Bỏ qua lỗi socket
     }
+
+    this.notificationsService
+      .onTablePaymentRequested({
+        branchId: table.branchId,
+        tableId,
+        tableNumber: table.tableNumber,
+        invoiceId: invoice.id,
+        invoiceCode: invoice.invoiceCode,
+        finalAmount: Number(updated.finalAmount),
+      })
+      .catch((err) => {
+        this.logger.error('[Notification] Lỗi báo yêu cầu thanh toán bàn cho staff:', err);
+      });
 
     return updated;
   }
@@ -785,6 +815,21 @@ export class DineInService {
         this.tablesGateway.notifyTableBillUpdated(table.branchId, table.id, invoice);
       } catch {
         // Bỏ qua lỗi socket
+      }
+
+      if (createdBatch) {
+        this.notificationsService
+          .onKitchenNewBatch({
+            branchId: table.branchId,
+            tableId: table.id,
+            tableNumber: table.tableNumber,
+            batchNumber: createdBatch.batchNumber,
+            itemCount: createdBatch.items?.length || 0,
+            invoiceCode: invoice.invoiceCode,
+          })
+          .catch((err) => {
+            this.logger.error('[Notification] Lỗi báo món đặt trước xuống bếp:', err);
+          });
       }
     }
 

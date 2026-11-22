@@ -3,9 +3,10 @@ import { DineInController } from './controllers/dine-in.controller';
 import { DineInService } from './services/dine-in.service';
 import { PrismaModule } from 'src/prisma/prisma.module';
 import { GatewayModule } from 'src/gateway/gateway.module';
+import { NotificationsModule } from 'src/modules/notifications/notifications.module';
 
 @Module({
-  imports: [PrismaModule, GatewayModule],
+  imports: [PrismaModule, GatewayModule, NotificationsModule],
   controllers: [DineInController],
   providers: [DineInService],
   exports: [DineInService],

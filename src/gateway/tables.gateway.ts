@@ -554,4 +554,12 @@ export class TablesGateway
     const room = `branch:${branchId}`;
     this.server.to(room).emit('payment:updated', paymentData);
   }
+
+  /**
+   * Phát thông báo thời gian thực tới kênh cá nhân đã xác thực của người dùng (`user:{userId}`)
+   */
+  notifyUser(userId: string, notification: unknown) {
+    if (!this.server || !userId) return;
+    this.server.to(`user:${userId}`).emit('notification:new', notification);
+  }
 }

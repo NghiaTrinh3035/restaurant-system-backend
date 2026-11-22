@@ -132,6 +132,26 @@ export class EnvironmentVariables {
   @IsString()
   @IsOptional()
   CMD_NGROK?: string;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  RESERVATION_REMINDER_MINUTES?: number;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  PICKUP_REMINDER_MINUTES?: number;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  PICKUP_OVERDUE_MINUTES?: number;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  TABLE_DIRTY_ALERT_MINUTES?: number;
 }
 
 export function validate(config: Record<string, unknown>) {

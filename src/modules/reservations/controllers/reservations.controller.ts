@@ -10,10 +10,11 @@ import {
   Put,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { ReservationsService } from '../services/reservations.service';
 import { ReservationAvailabilityService } from '../services/reservation-availability.service';
 import { ReservationBillingService } from '../services/reservation-billing.service';
@@ -90,6 +91,19 @@ export class ReservationsController {
     @CurrentUser() user: ICurrentUser,
   ) {
     return this.reservationsService.getReservations(query, user);
+  }
+
+  @Get(':code/qr.png')
+  @Public()
+  async getReservationQrPng(
+    @Param('code') code: string,
+    @Query('sig') sig: string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.reservationsService.getReservationQrPng(code, sig);
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.status(HttpStatus.OK).send(buffer);
   }
 
   @Get(':id')

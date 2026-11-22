@@ -19,6 +19,7 @@ import { GatewayModule } from './gateway/gateway.module';
 import { PickupOrdersModule } from './modules/pickup-orders/pickup-orders.module';
 import { DineInModule } from './modules/dine-in/dine-in.module';
 import { KitchenModule } from './modules/kitchen/kitchen.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 import { NgrokTunnelService } from './core/ngrok/ngrok-tunnel.service';
 
 @Module({
@@ -56,6 +57,7 @@ import { NgrokTunnelService } from './core/ngrok/ngrok-tunnel.service';
     PickupOrdersModule,
     DineInModule,
     KitchenModule,
+    NotificationsModule,
   ],
   controllers: [],
   providers: [
